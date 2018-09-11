@@ -8,9 +8,11 @@
 // Do only include this header for implementing new Interface of the
 // WasmFullDecoder.
 
+#include "src/base/platform/elapsed-timer.h"
 #include "src/bit-vector.h"
 #include "src/wasm/decoder.h"
 #include "src/wasm/function-body-decoder.h"
+#include "src/wasm/wasm-features.h"
 #include "src/wasm/wasm-limits.h"
 #include "src/wasm/wasm-module.h"
 #include "src/wasm/wasm-opcodes.h"
@@ -37,17 +39,21 @@ struct WasmException;
     return true;                  \
   }())
 
-#define RET_ON_PROTOTYPE_OPCODE(flag)                                          \
+#define RET_ON_PROTOTYPE_OPCODE(feat)                                          \
   DCHECK(!this->module_ || this->module_->origin == kWasmOrigin);              \
-  if (!FLAG_experimental_wasm_##flag) {                                        \
-    this->error("Invalid opcode (enable with --experimental-wasm-" #flag ")"); \
+  if (!this->enabled_.feat) {                                                  \
+    this->error("Invalid opcode (enable with --experimental-wasm-" #feat ")"); \
+  } else {                                                                     \
+    this->detected_->feat = true;                                              \
   }
 
-#define CHECK_PROTOTYPE_OPCODE(flag)                                           \
+#define CHECK_PROTOTYPE_OPCODE(feat)                                           \
   DCHECK(!this->module_ || this->module_->origin == kWasmOrigin);              \
-  if (!FLAG_experimental_wasm_##flag) {                                        \
-    this->error("Invalid opcode (enable with --experimental-wasm-" #flag ")"); \
+  if (!this->enabled_.feat) {                                                  \
+    this->error("Invalid opcode (enable with --experimental-wasm-" #feat ")"); \
     break;                                                                     \
+  } else {                                                                     \
+    this->detected_->feat = true;                                              \
   }
 
 #define OPCODE_ERROR(opcode, message)                                 \
@@ -208,14 +214,16 @@ struct BlockTypeImmediate {
   uint32_t sig_index = 0;
   FunctionSig* sig = nullptr;
 
-  inline BlockTypeImmediate(Decoder* decoder, const byte* pc) {
+  inline BlockTypeImmediate(const WasmFeatures& enabled, Decoder* decoder,
+                            const byte* pc) {
     uint8_t val = decoder->read_u8<validate>(pc + 1, "block type");
     if (!decode_local_type(val, &type)) {
       // Handle multi-value blocks.
-      if (!VALIDATE(FLAG_experimental_wasm_mv)) {
+      if (!VALIDATE(enabled.mv)) {
         decoder->error(pc + 1, "invalid block type");
         return;
       }
+      if (!VALIDATE(decoder->ok())) return;
       int32_t index =
           decoder->read_i32v<validate>(pc + 1, &length, "block arity");
       if (!VALIDATE(length > 0 && index >= 0)) {
@@ -660,13 +668,18 @@ struct ControlWithNamedConstructors : public ControlBase<Value> {
 template <Decoder::ValidateFlag validate>
 class WasmDecoder : public Decoder {
  public:
-  WasmDecoder(const WasmModule* module, FunctionSig* sig, const byte* start,
+  WasmDecoder(const WasmModule* module, const WasmFeatures& enabled,
+              WasmFeatures* detected, FunctionSig* sig, const byte* start,
               const byte* end, uint32_t buffer_offset = 0)
       : Decoder(start, end, buffer_offset),
         module_(module),
+        enabled_(enabled),
+        detected_(detected),
         sig_(sig),
         local_types_(nullptr) {}
   const WasmModule* module_;
+  const WasmFeatures enabled_;
+  WasmFeatures* detected_;
   FunctionSig* sig_;
 
   ZoneVector<ValueType>* local_types_;
@@ -677,7 +690,8 @@ class WasmDecoder : public Decoder {
                : static_cast<uint32_t>(local_types_->size());
   }
 
-  static bool DecodeLocals(Decoder* decoder, const FunctionSig* sig,
+  static bool DecodeLocals(const WasmFeatures& enabled, Decoder* decoder,
+                           const FunctionSig* sig,
                            ZoneVector<ValueType>* type_list) {
     DCHECK_NOT_NULL(type_list);
     DCHECK_EQ(0, type_list->size());
@@ -717,14 +731,21 @@ class WasmDecoder : public Decoder {
           type = kWasmF64;
           break;
         case kLocalAnyRef:
-          if (FLAG_experimental_wasm_anyref) {
+          if (enabled.anyref) {
             type = kWasmAnyRef;
             break;
           }
           decoder->error(decoder->pc() - 1, "invalid local type");
           return false;
+        case kLocalExceptRef:
+          if (enabled.eh) {
+            type = kWasmExceptRef;
+            break;
+          }
+          decoder->error(decoder->pc() - 1, "invalid local type");
+          return false;
         case kLocalS128:
-          if (FLAG_experimental_wasm_simd) {
+          if (enabled.simd) {
             type = kWasmS128;
             break;
           }
@@ -762,7 +783,7 @@ class WasmDecoder : public Decoder {
           break;
         case kExprSetLocal:  // fallthru
         case kExprTeeLocal: {
-          LocalIndexImmediate<Decoder::kValidate> imm(decoder, pc);
+          LocalIndexImmediate<validate> imm(decoder, pc);
           if (assigned->length() > 0 &&
               imm.index < static_cast<uint32_t>(assigned->length())) {
             // Unverified code might have an out-of-bounds index.
@@ -792,8 +813,7 @@ class WasmDecoder : public Decoder {
     return VALIDATE(decoder->ok()) ? assigned : nullptr;
   }
 
-  inline bool Validate(const byte* pc,
-                       LocalIndexImmediate<Decoder::kValidate>& imm) {
+  inline bool Validate(const byte* pc, LocalIndexImmediate<validate>& imm) {
     if (!VALIDATE(imm.index < total_locals())) {
       errorf(pc + 1, "invalid local index: %u", imm.index);
       return false;
@@ -1007,7 +1027,7 @@ class WasmDecoder : public Decoder {
       case kExprIf:  // fall through
       case kExprLoop:
       case kExprBlock: {
-        BlockTypeImmediate<validate> imm(decoder, pc);
+        BlockTypeImmediate<validate> imm(kAllWasmFeatures, decoder, pc);
         return 1 + imm.length;
       }
 
@@ -1020,7 +1040,7 @@ class WasmDecoder : public Decoder {
       case kExprSetLocal:
       case kExprTeeLocal:
       case kExprGetLocal: {
-        LocalIndexImmediate<Decoder::kValidate> imm(decoder, pc);
+        LocalIndexImmediate<validate> imm(decoder, pc);
         return 1 + imm.length;
       }
       case kExprBrTable: {
@@ -1213,10 +1233,11 @@ class WasmFullDecoder : public WasmDecoder<validate> {
 
  public:
   template <typename... InterfaceArgs>
-  WasmFullDecoder(Zone* zone, const wasm::WasmModule* module,
+  WasmFullDecoder(Zone* zone, const WasmModule* module,
+                  const WasmFeatures& enabled, WasmFeatures* detected,
                   const FunctionBody& body, InterfaceArgs&&... interface_args)
-      : WasmDecoder<validate>(module, body.sig, body.start, body.end,
-                              body.offset),
+      : WasmDecoder<validate>(module, enabled, detected, body.sig, body.start,
+                              body.end, body.offset),
         zone_(zone),
         interface_(std::forward<InterfaceArgs>(interface_args)...),
         local_type_vec_(zone),
@@ -1244,7 +1265,8 @@ class WasmFullDecoder : public WasmDecoder<validate> {
     }
 
     DCHECK_EQ(0, this->local_types_->size());
-    WasmDecoder<validate>::DecodeLocals(this, this->sig_, this->local_types_);
+    WasmDecoder<validate>::DecodeLocals(this->enabled_, this, this->sig_,
+                                        this->local_types_);
     CALL_INTERFACE(StartFunction);
     DecodeFunctionBody();
     if (!this->failed()) CALL_INTERFACE(FinishFunction);
@@ -1300,7 +1322,7 @@ class WasmFullDecoder : public WasmDecoder<validate> {
     return local_type_vec_[index];
   }
 
-  inline wasm::WasmCodePosition position() {
+  inline WasmCodePosition position() {
     int offset = static_cast<int>(this->pc_ - this->start_);
     DCHECK_EQ(this->pc_ - this->start_, offset);  // overflows cannot happen
     return offset;
@@ -1432,7 +1454,7 @@ class WasmFullDecoder : public WasmDecoder<validate> {
           case kExprNop:
             break;
           case kExprBlock: {
-            BlockTypeImmediate<validate> imm(this, this->pc_);
+            BlockTypeImmediate<validate> imm(this->enabled_, this, this->pc_);
             if (!this->Validate(imm)) break;
             PopArgs(imm.sig);
             auto* block = PushBlock();
@@ -1450,7 +1472,7 @@ class WasmFullDecoder : public WasmDecoder<validate> {
           }
           case kExprThrow: {
             CHECK_PROTOTYPE_OPCODE(eh);
-            ExceptionIndexImmediate<Decoder::kValidate> imm(this, this->pc_);
+            ExceptionIndexImmediate<validate> imm(this, this->pc_);
             len = 1 + imm.length;
             if (!this->Validate(this->pc_, imm)) break;
             PopArgs(imm.exception->ToFunctionSig());
@@ -1461,7 +1483,7 @@ class WasmFullDecoder : public WasmDecoder<validate> {
           }
           case kExprTry: {
             CHECK_PROTOTYPE_OPCODE(eh);
-            BlockTypeImmediate<validate> imm(this, this->pc_);
+            BlockTypeImmediate<validate> imm(this->enabled_, this, this->pc_);
             if (!this->Validate(imm)) break;
             PopArgs(imm.sig);
             auto* try_block = PushTry();
@@ -1474,7 +1496,7 @@ class WasmFullDecoder : public WasmDecoder<validate> {
           case kExprCatch: {
             // TODO(kschimpf): Fix to use type signature of exception.
             CHECK_PROTOTYPE_OPCODE(eh);
-            ExceptionIndexImmediate<Decoder::kValidate> imm(this, this->pc_);
+            ExceptionIndexImmediate<validate> imm(this, this->pc_);
             len = 1 + imm.length;
 
             if (!this->Validate(this->pc_, imm)) break;
@@ -1514,7 +1536,7 @@ class WasmFullDecoder : public WasmDecoder<validate> {
             break;
           }
           case kExprLoop: {
-            BlockTypeImmediate<validate> imm(this, this->pc_);
+            BlockTypeImmediate<validate> imm(this->enabled_, this, this->pc_);
             if (!this->Validate(imm)) break;
             PopArgs(imm.sig);
             auto* block = PushLoop();
@@ -1525,7 +1547,7 @@ class WasmFullDecoder : public WasmDecoder<validate> {
             break;
           }
           case kExprIf: {
-            BlockTypeImmediate<validate> imm(this, this->pc_);
+            BlockTypeImmediate<validate> imm(this->enabled_, this, this->pc_);
             if (!this->Validate(imm)) break;
             auto cond = Pop(0, kWasmI32);
             PopArgs(imm.sig);
@@ -1726,7 +1748,7 @@ class WasmFullDecoder : public WasmDecoder<validate> {
             break;
           }
           case kExprGetLocal: {
-            LocalIndexImmediate<Decoder::kValidate> imm(this, this->pc_);
+            LocalIndexImmediate<validate> imm(this, this->pc_);
             if (!this->Validate(this->pc_, imm)) break;
             auto* value = Push(imm.type);
             CALL_INTERFACE_IF_REACHABLE(GetLocal, value, imm);
@@ -1734,7 +1756,7 @@ class WasmFullDecoder : public WasmDecoder<validate> {
             break;
           }
           case kExprSetLocal: {
-            LocalIndexImmediate<Decoder::kValidate> imm(this, this->pc_);
+            LocalIndexImmediate<validate> imm(this, this->pc_);
             if (!this->Validate(this->pc_, imm)) break;
             auto value = Pop(0, local_type_vec_[imm.index]);
             CALL_INTERFACE_IF_REACHABLE(SetLocal, value, imm);
@@ -1742,7 +1764,7 @@ class WasmFullDecoder : public WasmDecoder<validate> {
             break;
           }
           case kExprTeeLocal: {
-            LocalIndexImmediate<Decoder::kValidate> imm(this, this->pc_);
+            LocalIndexImmediate<validate> imm(this, this->pc_);
             if (!this->Validate(this->pc_, imm)) break;
             auto value = Pop(0, local_type_vec_[imm.index]);
             auto* result = Push(value.type);
@@ -2475,14 +2497,13 @@ class WasmFullDecoder : public WasmDecoder<validate> {
 
 class EmptyInterface {
  public:
-  static constexpr wasm::Decoder::ValidateFlag validate =
-      wasm::Decoder::kValidate;
+  static constexpr Decoder::ValidateFlag validate = Decoder::kValidate;
   using Value = ValueBase;
   using Control = ControlBase<Value>;
-  using Decoder = WasmFullDecoder<validate, EmptyInterface>;
+  using FullDecoder = WasmFullDecoder<validate, EmptyInterface>;
 
 #define DEFINE_EMPTY_CALLBACK(name, ...) \
-  void name(Decoder* decoder, ##__VA_ARGS__) {}
+  void name(FullDecoder* decoder, ##__VA_ARGS__) {}
   INTERFACE_FUNCTIONS(DEFINE_EMPTY_CALLBACK)
 #undef DEFINE_EMPTY_CALLBACK
 };

@@ -154,17 +154,23 @@
   'asm/poppler/*': [PASS, SLOW, NO_VARIANTS],
   'asm/sqlite3/*': [PASS, SLOW, NO_VARIANTS],
 
+  # OOM flakes in isolates tests because too many largish heaps are created.
+  'asm/asm-heap': [PASS, NO_VARIANTS, ['isolates', SKIP]],
+
   # Slow tests.
   'copy-on-write-assert': [PASS, SLOW],
   'es6/typedarray-construct-offset-not-smi': [PASS, SLOW],
   'harmony/regexp-property-script-extensions': [PASS, SLOW],
+  'md5': [PASS, SLOW],
   'numops-fuzz-part*': [PASS, ['mode == debug', SLOW]],
   'readonly': [PASS, SLOW],
   'regress/regress-1122': [PASS, SLOW],
   'regress/regress-605470': [PASS, SLOW],
   'regress/regress-655573': [PASS, SLOW],
   'regress/regress-1200351': [PASS, SLOW],
+  'string-replace-gc': [PASS, SLOW],
   'wasm/asm-wasm-f32': [PASS, SLOW],
+  'wasm/asm-wasm-f64': [PASS, SLOW],
   'wasm/embenchen/*': [PASS, SLOW],
   'wasm/grow-memory': [PASS, SLOW],
   'wasm/unreachable-validation': [PASS, SLOW],
@@ -209,9 +215,6 @@
   # Allocates a huge string and then flattens it, very slow in debug mode.
   'regress/regress-752764': [PASS, ['mode == debug', SLOW]],
 
-  # https://crbug.com/v8/7682
-  'regress/regress-v8-7682': [FAIL],
-
   # https://crbug.com/v8/7697
   'array-literal-feedback': [PASS, FAIL],
 
@@ -253,6 +256,7 @@
   'regress/regress-2249': [SKIP],
   'regress/regress-4121': [SKIP],
   'compare-known-objects-slow': [SKIP],
+  'compiler/array-multiple-receiver-maps': [SKIP],
   # Tests taking too long
   'packed-elements': [SKIP],
   'regress/regress-1122': [SKIP],
@@ -270,7 +274,6 @@
 
   # TODO(mstarzinger): Takes too long with TF.
   'array-sort': [PASS, NO_VARIANTS],
-  'lexicographic-compare': [PASS, NO_VARIANTS],
   'regress/regress-91008': [PASS, NO_VARIANTS],
   'regress/regress-transcendental': [PASS, ['arch == arm64', NO_VARIANTS]],
   'compiler/osr-regress-max-locals': [PASS, NO_VARIANTS],
@@ -293,12 +296,6 @@
 
   # BUG(v8:4779): Crashes flakily with stress mode on arm64.
   'array-splice': [PASS, SLOW, ['arch == arm64', NO_VARIANTS]],
-
-  # BUG(chromium:751825): Crashes flakily.
-  'wasm/js-api': [SKIP],
-
-  # BUG(chromium:773631): Crashes flakily.
-  'wasm/streaming-trap-location': [SKIP],
 
   # BUG(v8:7880): Slow tests.
   'regress/regress-707066': [SKIP],
@@ -366,12 +363,10 @@
   'compiler/osr-with-args': [PASS, SLOW],
   'generated-transition-stub': [PASS, SLOW],
   'json2': [PASS, SLOW],
-  'lexicographic-compare': [PASS, SLOW],
   'math-floor-of-div-nosudiv': [PASS, SLOW],
   'math-floor-of-div': [PASS, SLOW],
   'messages': [PASS, SLOW],
   'packed-elements': [PASS, SLOW],
-  'regress/regress-2185': [PASS, SLOW],
   'regress/regress-2790': [PASS, SLOW],
   'regress/regress-331444': [PASS, SLOW],
   'regress/regress-490': [PASS, SLOW],
@@ -393,7 +388,6 @@
 
   # Pass but take too long with the simulator in debug mode.
   'array-sort': [PASS, SLOW],
-  'lexicographic-compare': [PASS, SLOW],
   'packed-elements': [SKIP],
   'regexp-global': [SKIP],
   'math-floor-of-div': [PASS, SLOW],
@@ -462,6 +456,9 @@
   # BUG(v8:7042). Uses a lot of memory.
   'regress/regress-678917': [SKIP],
 
+  # BUG(v8:8103). Uses a lot of memory.
+  'regress/regress-852258': [SKIP],
+
   # BUG(v8:6924). The test uses a lot of memory.
   'regress/wasm/regress-694433': [SKIP],
   'es6/typedarray': [PASS, NO_VARIANTS],
@@ -502,7 +499,6 @@
   # Slow tests.
   'array-sort': [PASS, SLOW],
   'compiler/osr-with-args': [PASS, SLOW],
-  'lexicographic-compare': [PASS, SLOW],
   'packed-elements': [PASS, SLOW],
   'regress/regress-2790': [PASS, SLOW],
   'regress/regress-91008': [PASS, SLOW],
@@ -638,10 +634,31 @@
 }],  # 'system == windows'
 
 ##############################################################################
+['system == android', {
+  # Tests consistently failing on Android.
+  # Unable to change locale on Android:
+  'icu-date-to-string': [FAIL],
+  'regress/regress-6288': [FAIL],
+  # OOM:
+  'regress/regress-748069': [FAIL],
+  'regress/regress-752764': [FAIL],
+  'regress/regress-779407': [FAIL],
+}],  # 'system == android'
+
+##############################################################################
 ['system == macos', {
   # BUG(v8:5333)
   'big-object-literal': [SKIP],
 }],  # 'system == macos'
+
+##############################################################################
+['isolates', {
+  # Slow tests.
+  'es6/typedarray-of': [PASS, SLOW],
+  'regress/regress-crbug-854299': [PASS, SLOW],
+  'regress/wasm/regress-810973': [PASS, SLOW],
+  'wasm/compare-exchange-stress': [PASS, SLOW],
+}],  # 'isolates'
 
 ##############################################################################
 ['deopt_fuzzer == True', {
@@ -692,6 +709,7 @@
   'keyed-load-with-symbol-key': [PASS, FAIL],
   'object-seal': [PASS, FAIL],
   'regress/regress-3709': [PASS, FAIL],
+  'regress/regress-6948': [PASS, FAIL],
   'regress/regress-7510': [PASS, FAIL],
   'regress/regress-trap-allocation-memento': [PASS, FAIL],
   'regress/regress-unlink-closures-on-deopt': [PASS, FAIL],
@@ -769,15 +787,32 @@
 
   # Flaky crash on Odroid devices: https://crbug.com/v8/7678
   'regress/regress-336820': [PASS, ['arch == arm and not simulator_run', SKIP]],
+
+  # Too slow for TSAN in stress mode.
+  'es6/classes': [PASS, ['tsan', SKIP]],
+  'regress/regress-1122': [PASS, ['tsan', SKIP]],
+
+  # Slow on arm64 simulator: https://crbug.com/v8/7783
+  'string-replace-gc': [PASS, ['arch == arm64 and simulator_run', SKIP]],
+
+  # Too memory hungry on Odroid devices.
+  'regress/regress-678917': [PASS, ['arch == arm and not simulator_run', SKIP]],
 }],  # variant == stress
 
 ##############################################################################
 ['variant == nooptimization and (arch == arm or arch == arm64) and simulator_run', {
   # Slow tests: https://crbug.com/v8/7783
-  'lexicographic-compare': [SKIP],
-  'regress/regress-2185': [SKIP],
+  'md5': [SKIP],
+  'wasm/asm-wasm-f32': [SKIP],
+  'wasm/asm-wasm-f64': [SKIP],
   'wasm/grow-memory': [SKIP],
 }],  # variant == nooptimization and (arch == arm or arch == arm64) and simulator_run
+
+##############################################################################
+['(arch == arm or arch == arm64)', {
+  # Flaky tests: https://crbug.com/v8/8090
+  'regress/regress-752764': [SKIP],
+}],  # (arch == arm or arch == arm64)
 
 ##############################################################################
 ['gcov_coverage', {

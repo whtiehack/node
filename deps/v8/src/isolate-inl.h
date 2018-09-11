@@ -11,17 +11,28 @@
 namespace v8 {
 namespace internal {
 
+bool Isolate::FromWritableHeapObject(HeapObject* obj, Isolate** isolate) {
+  i::MemoryChunk* chunk = i::MemoryChunk::FromHeapObject(obj);
+  if (chunk->owner()->identity() == i::RO_SPACE) {
+    *isolate = nullptr;
+    return false;
+  }
+  *isolate = chunk->heap()->isolate();
+  return true;
+}
 
 void Isolate::set_context(Context* context) {
   DCHECK(context == nullptr || context->IsContext());
   thread_local_top_.context_ = context;
 }
 
-Handle<Context> Isolate::native_context() {
+Handle<NativeContext> Isolate::native_context() {
   return handle(context()->native_context(), this);
 }
 
-Context* Isolate::raw_native_context() { return context()->native_context(); }
+NativeContext* Isolate::raw_native_context() {
+  return context()->native_context();
+}
 
 Object* Isolate::pending_exception() {
   DCHECK(has_pending_exception());
@@ -47,17 +58,6 @@ bool Isolate::has_pending_exception() {
   return !thread_local_top_.pending_exception_->IsTheHole(this);
 }
 
-Object* Isolate::get_wasm_caught_exception() {
-  return thread_local_top_.wasm_caught_exception_;
-}
-
-void Isolate::set_wasm_caught_exception(Object* exception) {
-  thread_local_top_.wasm_caught_exception_ = exception;
-}
-
-void Isolate::clear_wasm_caught_exception() {
-  thread_local_top_.wasm_caught_exception_ = nullptr;
-}
 
 void Isolate::clear_pending_message() {
   thread_local_top_.pending_message_obj_ = ReadOnlyRoots(this).the_hole_value();

@@ -14,13 +14,94 @@ namespace v8 {
 namespace internal {
 namespace torque {
 
+std::string StringLiteralUnquote(const std::string& s) {
+  DCHECK(('"' == s.front() && '"' == s.back()) ||
+         ('\'' == s.front() && '\'' == s.back()));
+  std::stringstream result;
+  for (size_t i = 1; i < s.length() - 1; ++i) {
+    if (s[i] == '\\') {
+      switch (s[++i]) {
+        case 'n':
+          result << '\n';
+          break;
+        case 'r':
+          result << '\r';
+          break;
+        case 't':
+          result << '\t';
+          break;
+        case '\'':
+        case '"':
+        case '\\':
+          result << s[i];
+          break;
+        default:
+          UNREACHABLE();
+      }
+    } else {
+      result << s[i];
+    }
+  }
+  return result.str();
+}
+
+std::string StringLiteralQuote(const std::string& s) {
+  std::stringstream result;
+  result << '"';
+  for (size_t i = 0; i < s.length() - 1; ++i) {
+    switch (s[i]) {
+      case '\n':
+        result << "\\n";
+        break;
+      case '\r':
+        result << "\\r";
+        break;
+      case '\t':
+        result << "\\t";
+        break;
+      case '\'':
+      case '"':
+      case '\\':
+        result << "\\" << s[i];
+        break;
+      default:
+        result << s[i];
+    }
+  }
+  result << '"';
+  return result.str();
+}
+
 std::string CurrentPositionAsString() {
   return PositionAsString(CurrentSourcePosition::Get());
 }
 
 [[noreturn]] void ReportError(const std::string& error) {
   std::cerr << CurrentPositionAsString() << ": Torque error: " << error << "\n";
-  throw(-1);
+  std::abort();
+}
+
+void LintError(const std::string& error) {
+  std::cerr << CurrentPositionAsString() << ": Lint error: " << error << "\n";
+}
+
+namespace {
+
+bool ContainsUnderscore(const std::string& s) {
+  if (s.empty()) return false;
+  return s.find("_") != std::string::npos;
+}
+
+}  // namespace
+
+bool IsLowerCamelCase(const std::string& s) {
+  if (s.empty()) return false;
+  return islower(s[0]) && !ContainsUnderscore(s);
+}
+
+bool IsUpperCamelCase(const std::string& s) {
+  if (s.empty()) return false;
+  return isupper(s[0]) && !ContainsUnderscore(s);
 }
 
 std::string CamelifyString(const std::string& underscore_string) {

@@ -311,6 +311,7 @@ class String : public Name {
   // Externalization.
   bool MakeExternal(v8::String::ExternalStringResource* resource);
   bool MakeExternal(v8::String::ExternalOneByteStringResource* resource);
+  bool SupportsExternalization();
 
   // Conversion.
   inline bool AsArrayIndex(uint32_t* index);
@@ -484,6 +485,15 @@ class SeqString : public String {
 
  private:
   DISALLOW_IMPLICIT_CONSTRUCTORS(SeqString);
+};
+
+class InternalizedString : public String {
+ public:
+  DECL_CAST(InternalizedString)
+  // TODO(neis): Possibly move some stuff from String here.
+
+ private:
+  DISALLOW_IMPLICIT_CONSTRUCTORS(InternalizedString);
 };
 
 // The OneByteString class captures sequential one-byte string objects.
@@ -720,12 +730,12 @@ class ExternalString : public String {
 
   // Layout description.
   static const int kResourceOffset = POINTER_SIZE_ALIGN(String::kSize);
-  static const int kShortSize = kResourceOffset + kPointerSize;
+  static const int kUncachedSize = kResourceOffset + kPointerSize;
   static const int kResourceDataOffset = kResourceOffset + kPointerSize;
   static const int kSize = kResourceDataOffset + kPointerSize;
 
-  // Return whether external string is short (data pointer is not cached).
-  inline bool is_short() const;
+  // Return whether the external string data pointer is not cached.
+  inline bool is_uncached() const;
   // Size in bytes of the external payload.
   int ExternalPayloadSize() const;
 
@@ -751,6 +761,11 @@ class ExternalOneByteString : public ExternalString {
 
   // The underlying resource.
   inline const Resource* resource();
+
+  // It is assumed that the previous resource is null. If it is not null, then
+  // it is the responsability of the caller the handle the previous resource.
+  inline void SetResource(Isolate* isolate, const Resource* buffer);
+  // Used only during serialization.
   inline void set_resource(const Resource* buffer);
 
   // Update the pointer cache to the external character array.
@@ -784,6 +799,11 @@ class ExternalTwoByteString : public ExternalString {
 
   // The underlying string resource.
   inline const Resource* resource();
+
+  // It is assumed that the previous resource is null. If it is not null, then
+  // it is the responsability of the caller the handle the previous resource.
+  inline void SetResource(Isolate* isolate, const Resource* buffer);
+  // Used only during serialization.
   inline void set_resource(const Resource* buffer);
 
   // Update the pointer cache to the external character array.

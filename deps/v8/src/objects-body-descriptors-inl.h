@@ -616,10 +616,7 @@ class DataHandler::BodyDescriptor final : public BodyDescriptorBase {
     static_assert(kData1Offset < kSizeWithData1,
                   "Field order must be in sync with this iteration code");
     IteratePointers(obj, kSmiHandlerOffset, kData1Offset, v);
-    if (object_size >= kSizeWithData1) {
-      IterateMaybeWeakPointer(obj, kData1Offset, v);
-      IteratePointers(obj, kData1Offset + kPointerSize, object_size, v);
-    }
+    IterateMaybeWeakPointers(obj, kData1Offset, object_size, v);
   }
 
   static inline int SizeOf(Map* map, HeapObject* object) {
@@ -729,9 +726,16 @@ ReturnType BodyDescriptorApply(InstanceType type, T1 p1, T2 p2, T3 p3, T4 p4) {
     case JS_MESSAGE_OBJECT_TYPE:
     case JS_BOUND_FUNCTION_TYPE:
 #ifdef V8_INTL_SUPPORT
+    case JS_INTL_V8_BREAK_ITERATOR_TYPE:
+    case JS_INTL_COLLATOR_TYPE:
+    case JS_INTL_DATE_TIME_FORMAT_TYPE:
+    case JS_INTL_LIST_FORMAT_TYPE:
     case JS_INTL_LOCALE_TYPE:
+    case JS_INTL_NUMBER_FORMAT_TYPE:
+    case JS_INTL_PLURAL_RULES_TYPE:
     case JS_INTL_RELATIVE_TIME_FORMAT_TYPE:
 #endif  // V8_INTL_SUPPORT
+    case WASM_EXCEPTION_TYPE:
     case WASM_GLOBAL_TYPE:
     case WASM_MEMORY_TYPE:
     case WASM_MODULE_TYPE:
@@ -762,8 +766,6 @@ ReturnType BodyDescriptorApply(InstanceType type, T1 p1, T2 p2, T3 p3, T4 p4) {
       return Op::template apply<Cell::BodyDescriptor>(p1, p2, p3, p4);
     case PROPERTY_CELL_TYPE:
       return Op::template apply<PropertyCell::BodyDescriptor>(p1, p2, p3, p4);
-    case WEAK_CELL_TYPE:
-      return Op::template apply<WeakCell::BodyDescriptor>(p1, p2, p3, p4);
     case SYMBOL_TYPE:
       return Op::template apply<Symbol::BodyDescriptor>(p1, p2, p3, p4);
     case BYTECODE_ARRAY_TYPE:
@@ -782,6 +784,9 @@ ReturnType BodyDescriptorApply(InstanceType type, T1 p1, T2 p2, T3 p3, T4 p4) {
     case PRE_PARSED_SCOPE_DATA_TYPE:
       return Op::template apply<PreParsedScopeData::BodyDescriptor>(p1, p2, p3,
                                                                     p4);
+    case UNCOMPILED_DATA_WITHOUT_PRE_PARSED_SCOPE_TYPE:
+      return Op::template apply<
+          UncompiledDataWithoutPreParsedScope::BodyDescriptor>(p1, p2, p3, p4);
     case UNCOMPILED_DATA_WITH_PRE_PARSED_SCOPE_TYPE:
       return Op::template apply<
           UncompiledDataWithPreParsedScope::BodyDescriptor>(p1, p2, p3, p4);
@@ -791,10 +796,9 @@ ReturnType BodyDescriptorApply(InstanceType type, T1 p1, T2 p2, T3 p3, T4 p4) {
     case BYTE_ARRAY_TYPE:
     case FREE_SPACE_TYPE:
     case BIGINT_TYPE:
-    case UNCOMPILED_DATA_WITHOUT_PRE_PARSED_SCOPE_TYPE:
       return ReturnType();
 
-#define TYPED_ARRAY_CASE(Type, type, TYPE, ctype, size)                        \
+#define TYPED_ARRAY_CASE(Type, type, TYPE, ctype)                              \
   case FIXED_##TYPE##_ARRAY_TYPE:                                              \
     return Op::template apply<FixedTypedArrayBase::BodyDescriptor>(p1, p2, p3, \
                                                                    p4);

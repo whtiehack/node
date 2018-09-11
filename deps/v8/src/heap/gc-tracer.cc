@@ -665,7 +665,6 @@ void GCTracer::PrintNVP() const {
           "clear.slots_buffer=%.1f "
           "clear.store_buffer=%.1f "
           "clear.string_table=%.1f "
-          "clear.weak_cells=%.1f "
           "clear.weak_collections=%.1f "
           "clear.weak_lists=%.1f "
           "clear.weak_references=%.1f "
@@ -762,7 +761,6 @@ void GCTracer::PrintNVP() const {
           current_.scopes[Scope::MC_CLEAR_SLOTS_BUFFER],
           current_.scopes[Scope::MC_CLEAR_STORE_BUFFER],
           current_.scopes[Scope::MC_CLEAR_STRING_TABLE],
-          current_.scopes[Scope::MC_CLEAR_WEAK_CELLS],
           current_.scopes[Scope::MC_CLEAR_WEAK_COLLECTIONS],
           current_.scopes[Scope::MC_CLEAR_WEAK_LISTS],
           current_.scopes[Scope::MC_CLEAR_WEAK_REFERENCES],
@@ -1095,7 +1093,7 @@ void GCTracer::AddBackgroundScopeSample(
   }
 }
 
-void GCTracer::RecordMarkCompactHistograms(HistogramTimer* gc_timer) {
+void GCTracer::RecordGCPhasesHistograms(HistogramTimer* gc_timer) {
   Counters* counters = heap_->isolate()->counters();
   if (gc_timer == counters->gc_finalize()) {
     DCHECK_EQ(Scope::FIRST_TOP_MC_SCOPE, Scope::MC_CLEAR);
@@ -1114,6 +1112,11 @@ void GCTracer::RecordMarkCompactHistograms(HistogramTimer* gc_timer) {
     counters->gc_finalize_sweep()->AddSample(
         static_cast<int>(current_.scopes[Scope::MC_SWEEP]));
     DCHECK_EQ(Scope::LAST_TOP_MC_SCOPE, Scope::MC_SWEEP);
+  } else if (gc_timer == counters->gc_scavenger()) {
+    counters->gc_scavenger_scavenge_main()->AddSample(
+        static_cast<int>(current_.scopes[Scope::SCAVENGER_SCAVENGE_PARALLEL]));
+    counters->gc_scavenger_scavenge_roots()->AddSample(
+        static_cast<int>(current_.scopes[Scope::SCAVENGER_SCAVENGE_ROOTS]));
   }
 }
 

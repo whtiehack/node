@@ -2,11 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/runtime/runtime-utils.h"
-
 #include <vector>
 
-#include "src/arguments.h"
+#include "src/arguments-inl.h"
 #include "src/compiler.h"
 #include "src/debug/debug-coverage.h"
 #include "src/debug/debug-evaluate.h"
@@ -22,7 +20,9 @@
 #include "src/isolate-inl.h"
 #include "src/objects/debug-objects-inl.h"
 #include "src/objects/js-collection-inl.h"
+#include "src/objects/js-generator-inl.h"
 #include "src/objects/js-promise-inl.h"
+#include "src/runtime/runtime-utils.h"
 #include "src/runtime/runtime.h"
 #include "src/snapshot/snapshot.h"
 #include "src/wasm/wasm-objects-inl.h"
@@ -810,5 +810,19 @@ RUNTIME_FUNCTION(Runtime_LiveEditPatchScript) {
   }
   return ReadOnlyRoots(isolate).undefined_value();
 }
+
+RUNTIME_FUNCTION(Runtime_PerformSideEffectCheckForObject) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(1, args.length());
+  CONVERT_ARG_HANDLE_CHECKED(JSReceiver, object, 0);
+
+  DCHECK_EQ(isolate->debug_execution_mode(), DebugInfo::kSideEffects);
+  if (!isolate->debug()->PerformSideEffectCheckForObject(object)) {
+    DCHECK(isolate->has_pending_exception());
+    return ReadOnlyRoots(isolate).exception();
+  }
+  return ReadOnlyRoots(isolate).undefined_value();
+}
+
 }  // namespace internal
 }  // namespace v8

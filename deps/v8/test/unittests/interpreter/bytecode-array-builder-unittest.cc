@@ -375,8 +375,10 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
       .CreateRegExpLiteral(ast_factory.GetOneByteString("wide_literal"), 0, 0)
       .CreateArrayLiteral(0, 0, 0)
       .CreateEmptyArrayLiteral(0)
+      .CreateArrayFromIterable()
       .CreateObjectLiteral(0, 0, 0, reg)
-      .CreateEmptyObjectLiteral();
+      .CreateEmptyObjectLiteral()
+      .CloneObject(reg, 0, 0);
 
   // Emit load and store operations for module variables.
   builder.LoadModuleVariable(-1, 42)

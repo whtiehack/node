@@ -80,10 +80,6 @@ enum class Bytecode : uint8_t;
 enum class OperandScale : uint8_t;
 }  // namespace interpreter
 
-namespace wasm {
-class WasmCode;
-}
-
 #undef LOG
 #define LOG(isolate, Call)                              \
   do {                                                  \
@@ -143,6 +139,8 @@ class Logger : public CodeEventListener {
                            JitCodeEventHandler event_handler);
 
   sampler::Sampler* sampler();
+
+  void StopProfilerThread();
 
   // Frees resources acquired in SetUp.
   // When a temporary file is used for the log, returns its stream descriptor,

@@ -6,6 +6,7 @@
 #define V8_INTERPRETER_BYTECODE_GENERATOR_H_
 
 #include "src/ast/ast.h"
+#include "src/feedback-vector.h"
 #include "src/interpreter/bytecode-array-builder.h"
 #include "src/interpreter/bytecode-label.h"
 #include "src/interpreter/bytecode-register.h"
@@ -120,6 +121,11 @@ class BytecodeGenerator final : public AstVisitor<BytecodeGenerator> {
   void VisitPropertyLoadForRegister(Register obj, Property* expr,
                                     Register destination);
 
+  void BuildLoadNamedProperty(Property* property, Register object,
+                              const AstRawString* name);
+  void BuildStoreNamedProperty(Property* property, Register object,
+                               const AstRawString* name);
+
   void BuildVariableLoad(Variable* variable, HoleCheckMode hole_check_mode,
                          TypeofMode typeof_mode = NOT_INSIDE_TYPEOF);
   void BuildVariableLoadForAccumulatorValue(
@@ -177,11 +183,12 @@ class BytecodeGenerator final : public AstVisitor<BytecodeGenerator> {
   void BuildArrayLiteralSpread(Spread* spread, Register array, Register index,
                                FeedbackSlot index_slot,
                                FeedbackSlot element_slot);
-  void BuildArrayLiteralElementsInsertion(Register array,
-                                          int first_spread_index,
-                                          ZonePtrList<Expression>* elements,
-                                          bool skip_constants);
-
+  // Create Array literals. |expr| can be nullptr, but if provided,
+  // a boilerplate will be used to create an initial array for elements
+  // before the first spread.
+  void BuildCreateArrayLiteral(ZonePtrList<Expression>* elements,
+                               ArrayLiteral* expr);
+  void BuildCreateObjectLiteral(Register literal, uint8_t flags, size_t entry);
   void AllocateTopLevelRegisters();
   void VisitArgumentsObject(Variable* variable);
   void VisitRestArgumentsArray(Variable* rest);
@@ -277,6 +284,11 @@ class BytecodeGenerator final : public AstVisitor<BytecodeGenerator> {
 
   void AddToEagerLiteralsIfEager(FunctionLiteral* literal);
 
+  // Checks if the visited expression is one shot, i.e executed only once. Any
+  // expression either in a top level code or an IIFE that is not within a loop
+  // is eligible for one shot optimizations.
+  inline bool ShouldOptimizeAsOneShot() const;
+
   static constexpr ToBooleanMode ToBooleanModeFromTypeHint(TypeHint type_hint) {
     return type_hint == TypeHint::kBoolean ? ToBooleanMode::kAlreadyBoolean
                                            : ToBooleanMode::kConvertToBoolean;
@@ -362,7 +374,7 @@ class BytecodeGenerator final : public AstVisitor<BytecodeGenerator> {
 
   // Dummy feedback slot for compare operations, where we don't care about
   // feedback
-  FeedbackSlot dummy_feedback_slot_;
+  SharedFeedbackSlot dummy_feedback_slot_;
 
   BytecodeJumpTable* generator_jump_table_;
   int suspend_count_;

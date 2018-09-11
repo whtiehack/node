@@ -59,17 +59,6 @@ void LiftoffAssembler::Store(Register dst_addr, Register offset_reg,
   BAILOUT("Store");
 }
 
-void LiftoffAssembler::ChangeEndiannessLoad(LiftoffRegister dst, LoadType type,
-                                            LiftoffRegList pinned) {
-  BAILOUT("ChangeEndiannessLoad");
-}
-
-void LiftoffAssembler::ChangeEndiannessStore(LiftoffRegister src,
-                                             StoreType type,
-                                             LiftoffRegList pinned) {
-  BAILOUT("ChangeEndiannessStore");
-}
-
 void LiftoffAssembler::LoadCallerFrameSlot(LiftoffRegister dst,
                                            uint32_t caller_slot_idx,
                                            ValueType type) {
@@ -223,6 +212,10 @@ void LiftoffAssembler::emit_i32_remu(Register dst, Register lhs, Register rhs,
   BAILOUT("i32_remu");
 }
 
+void LiftoffAssembler::emit_i32_shr(Register dst, Register lhs, int amount) {
+  BAILOUT("i32_shr");
+}
+
 bool LiftoffAssembler::emit_i64_divs(LiftoffRegister dst, LiftoffRegister lhs,
                                      LiftoffRegister rhs,
                                      Label* trap_div_by_zero,
@@ -248,8 +241,13 @@ bool LiftoffAssembler::emit_i64_remu(LiftoffRegister dst, LiftoffRegister lhs,
   return false;
 }
 
+void LiftoffAssembler::emit_i64_shr(LiftoffRegister dst, LiftoffRegister lhs,
+                                    int amount) {
+  BAILOUT("i64_shr");
+}
+
 void LiftoffAssembler::emit_i32_to_intptr(Register dst, Register src) {
-  UNREACHABLE();
+  // This is a nop on arm.
 }
 
 bool LiftoffAssembler::emit_type_conversion(WasmOpcode opcode,

@@ -43,6 +43,7 @@ namespace compiler {
   V(IA32Lzcnt)                     \
   V(IA32Tzcnt)                     \
   V(IA32Popcnt)                    \
+  V(IA32Bswap)                     \
   V(LFence)                        \
   V(SSEFloat32Cmp)                 \
   V(SSEFloat32Add)                 \
@@ -350,7 +351,16 @@ namespace compiler {
   V(IA32S1x8AnyTrue)               \
   V(IA32S1x8AllTrue)               \
   V(IA32S1x16AnyTrue)              \
-  V(IA32S1x16AllTrue)
+  V(IA32S1x16AllTrue)              \
+  V(IA32Word32AtomicPairLoad)      \
+  V(IA32Word32AtomicPairStore)     \
+  V(IA32Word32AtomicPairAdd)       \
+  V(IA32Word32AtomicPairSub)       \
+  V(IA32Word32AtomicPairAnd)       \
+  V(IA32Word32AtomicPairOr)        \
+  V(IA32Word32AtomicPairXor)       \
+  V(IA32Word32AtomicPairExchange)  \
+  V(IA32Word32AtomicPairCompareExchange)
 
 // Addressing modes represent the "shape" of inputs to an instruction.
 // Many instructions support multiple addressing modes. Addressing modes

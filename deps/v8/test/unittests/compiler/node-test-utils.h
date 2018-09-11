@@ -272,6 +272,9 @@ Matcher<Node*> IsNumberSqrt(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsNumberTan(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsNumberTanh(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsNumberTrunc(const Matcher<Node*>& value_matcher);
+Matcher<Node*> IsStringConcat(const Matcher<Node*>& length_matcher,
+                              const Matcher<Node*>& lhs_matcher,
+                              const Matcher<Node*>& rhs_matcher);
 Matcher<Node*> IsStringFromSingleCharCode(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsStringLength(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsAllocate(const Matcher<Node*>& size_matcher,

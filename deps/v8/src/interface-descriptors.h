@@ -60,7 +60,7 @@ namespace internal {
   V(StringAt)                         \
   V(StringSubstring)                  \
   V(GetProperty)                      \
-  V(ArgumentAdaptor)                  \
+  V(ArgumentsAdaptor)                 \
   V(ApiCallback)                      \
   V(ApiGetter)                        \
   V(GrowArrayElements)                \
@@ -74,6 +74,7 @@ namespace internal {
   V(FrameDropperTrampoline)           \
   V(RunMicrotasks)                    \
   V(WasmGrowMemory)                   \
+  V(CloneObjectWithVector)            \
   BUILTIN_LIST_TFS(V)
 
 class V8_EXPORT_PRIVATE CallInterfaceDescriptorData {
@@ -108,8 +109,8 @@ class V8_EXPORT_PRIVATE CallInterfaceDescriptorData {
   void Reset();
 
   bool IsInitialized() const {
-    return register_param_count_ >= 0 && return_count_ >= 0 &&
-           param_count_ >= 0;
+    return IsInitializedPlatformSpecific() &&
+           IsInitializedPlatformIndependent();
   }
 
   Flags flags() const { return flags_; }
@@ -138,6 +139,23 @@ class V8_EXPORT_PRIVATE CallInterfaceDescriptorData {
   RegList allocatable_registers() const { return allocatable_registers_; }
 
  private:
+  bool IsInitializedPlatformSpecific() const {
+    const bool initialized =
+        register_param_count_ >= 0 && register_params_ != nullptr;
+    // Platform-specific initialization happens before platform-independent.
+    return initialized;
+  }
+  bool IsInitializedPlatformIndependent() const {
+    const bool initialized =
+        return_count_ >= 0 && param_count_ >= 0 && machine_types_ != nullptr;
+    // Platform-specific initialization happens before platform-independent.
+    return initialized;
+  }
+
+#ifdef DEBUG
+  bool AllStackParametersAreTagged() const;
+#endif  // DEBUG
+
   int register_param_count_ = -1;
   int return_count_ = -1;
   int param_count_ = -1;
@@ -288,14 +306,32 @@ class V8_EXPORT_PRIVATE CallInterfaceDescriptor {
   explicit name() : base(key()) {}               \
   static inline CallDescriptors::Key key();
 
+#if defined(V8_TARGET_ARCH_IA32)
+// To support all possible cases, we must limit the number of register args for
+// TFS builtins on ia32 to 3. Out of the 6 allocatable registers, esi is taken
+// as the context register and ebx is the root register. One register must
+// remain available to store the jump/call target. Thus 3 registers remain for
+// arguments. The reason this applies to TFS builtins specifically is because
+// this becomes relevant for builtins used as targets of Torque function
+// pointers (which must have a register available to store the target).
+// TODO(jgruber): Ideally we should just decrement kMaxBuiltinRegisterParams but
+// that comes with its own set of complications. It's possible, but requires
+// refactoring the calling convention of other existing stubs.
+constexpr int kMaxBuiltinRegisterParams = 4;
+constexpr int kMaxTFSBuiltinRegisterParams = 3;
+#else
 constexpr int kMaxBuiltinRegisterParams = 5;
+constexpr int kMaxTFSBuiltinRegisterParams = kMaxBuiltinRegisterParams;
+#endif
+STATIC_ASSERT(kMaxTFSBuiltinRegisterParams <= kMaxBuiltinRegisterParams);
 
 #define DECLARE_DEFAULT_DESCRIPTOR(name, base)                                 \
   DECLARE_DESCRIPTOR_WITH_BASE(name, base)                                     \
  protected:                                                                    \
   static const int kRegisterParams =                                           \
-      kParameterCount > kMaxBuiltinRegisterParams ? kMaxBuiltinRegisterParams  \
-                                                  : kParameterCount;           \
+      kParameterCount > kMaxTFSBuiltinRegisterParams                           \
+          ? kMaxTFSBuiltinRegisterParams                                       \
+          : kParameterCount;                                                   \
   static const int kStackParams = kParameterCount - kRegisterParams;           \
   void InitializePlatformSpecific(CallInterfaceDescriptorData* data)           \
       override {                                                               \
@@ -578,6 +614,15 @@ class LoadWithVectorDescriptor : public LoadDescriptor {
   DECLARE_DESCRIPTOR(LoadWithVectorDescriptor, LoadDescriptor)
 
   static const Register VectorRegister();
+
+#if V8_TARGET_ARCH_IA32
+  static const bool kPassLastArgsOnStack = true;
+#else
+  static const bool kPassLastArgsOnStack = false;
+#endif
+
+  // Pass vector through the stack.
+  static const int kStackArgumentsCount = kPassLastArgsOnStack ? 1 : 0;
 };
 
 class LoadGlobalWithVectorDescriptor : public LoadGlobalDescriptor {
@@ -588,9 +633,15 @@ class LoadGlobalWithVectorDescriptor : public LoadGlobalDescriptor {
                          MachineType::AnyTagged())     // kVector
   DECLARE_DESCRIPTOR(LoadGlobalWithVectorDescriptor, LoadGlobalDescriptor)
 
+#if V8_TARGET_ARCH_IA32
+  // On ia32, LoadWithVectorDescriptor passes vector on the stack and thus we
+  // need to choose a new register here.
+  static const Register VectorRegister() { return edx; }
+#else
   static const Register VectorRegister() {
     return LoadWithVectorDescriptor::VectorRegister();
   }
+#endif
 };
 
 class FastNewFunctionContextDescriptor : public CallInterfaceDescriptor {
@@ -616,10 +667,9 @@ class FastNewObjectDescriptor : public CallInterfaceDescriptor {
 
 class RecordWriteDescriptor final : public CallInterfaceDescriptor {
  public:
-  DEFINE_PARAMETERS(kObject, kSlot, kIsolate, kRememberedSet, kFPMode)
+  DEFINE_PARAMETERS(kObject, kSlot, kRememberedSet, kFPMode)
   DEFINE_PARAMETER_TYPES(MachineType::TaggedPointer(),  // kObject
                          MachineType::Pointer(),        // kSlot
-                         MachineType::Pointer(),        // kIsolate
                          MachineType::TaggedSigned(),   // kRememberedSet
                          MachineType::TaggedSigned())   // kFPMode
 
@@ -667,12 +717,12 @@ class CallTrampolineDescriptor : public CallInterfaceDescriptor {
 
 class CallVarargsDescriptor : public CallInterfaceDescriptor {
  public:
-  DEFINE_PARAMETERS(kTarget, kActualArgumentsCount, kArgumentsList,
-                    kArgumentsLength)
+  DEFINE_PARAMETERS(kTarget, kActualArgumentsCount, kArgumentsLength,
+                    kArgumentsList)
   DEFINE_PARAMETER_TYPES(MachineType::AnyTagged(),  // kTarget
                          MachineType::Int32(),      // kActualArgumentsCount
-                         MachineType::AnyTagged(),  // kArgumentsList
-                         MachineType::Int32())      // kArgumentsLength
+                         MachineType::Int32(),      // kArgumentsLength
+                         MachineType::AnyTagged())  // kArgumentsList
   DECLARE_DESCRIPTOR(CallVarargsDescriptor, CallInterfaceDescriptor)
 };
 
@@ -704,9 +754,10 @@ class CallWithArrayLikeDescriptor : public CallInterfaceDescriptor {
 
 class ConstructVarargsDescriptor : public CallInterfaceDescriptor {
  public:
-  DEFINE_JS_PARAMETERS(kArgumentsList, kArgumentsLength)
-  DEFINE_JS_PARAMETER_TYPES(MachineType::AnyTagged(),  // kArgumentsList
-                            MachineType::Int32())      // kArgumentsLength
+  DEFINE_JS_PARAMETERS(kArgumentsLength, kArgumentsList)
+  DEFINE_JS_PARAMETER_TYPES(MachineType::Int32(),      // kArgumentsLength
+                            MachineType::AnyTagged())  // kArgumentsList
+
   DECLARE_DESCRIPTOR(ConstructVarargsDescriptor, CallInterfaceDescriptor)
 };
 
@@ -736,6 +787,7 @@ class ConstructWithArrayLikeDescriptor : public CallInterfaceDescriptor {
 // TODO(ishell): consider merging this with ArrayConstructorDescriptor
 class ConstructStubDescriptor : public CallInterfaceDescriptor {
  public:
+  // TODO(jgruber): Remove the unused allocation site parameter.
   DEFINE_JS_PARAMETERS(kAllocationSite)
   DEFINE_JS_PARAMETER_TYPES(MachineType::AnyTagged());
 
@@ -856,11 +908,11 @@ class StringSubstringDescriptor final : public CallInterfaceDescriptor {
   DECLARE_DESCRIPTOR(StringSubstringDescriptor, CallInterfaceDescriptor)
 };
 
-class ArgumentAdaptorDescriptor : public CallInterfaceDescriptor {
+class ArgumentsAdaptorDescriptor : public CallInterfaceDescriptor {
  public:
   DEFINE_JS_PARAMETERS(kExpectedArgumentsCount)
   DEFINE_JS_PARAMETER_TYPES(MachineType::Int32())
-  DECLARE_DESCRIPTOR(ArgumentAdaptorDescriptor, CallInterfaceDescriptor)
+  DECLARE_DESCRIPTOR(ArgumentsAdaptorDescriptor, CallInterfaceDescriptor)
 };
 
 class CppBuiltinAdaptorDescriptor : public CallInterfaceDescriptor {
@@ -890,6 +942,9 @@ class CEntry1ArgvOnStackDescriptor : public CallInterfaceDescriptor {
 
 class ApiCallbackDescriptor : public CallInterfaceDescriptor {
  public:
+  // TODO(jgruber): This could be simplified to pass call data on the stack
+  // since this is what the CallApiCallbackStub anyways. This would free a
+  // register.
   DEFINE_PARAMETERS_NO_CONTEXT(kTargetContext, kCallData, kHolder,
                                kApiFunctionAddress)
   DEFINE_PARAMETER_TYPES(MachineType::AnyTagged(),  // kTargetContext
@@ -958,15 +1013,24 @@ class InterpreterPushArgsThenCallDescriptor : public CallInterfaceDescriptor {
 class InterpreterPushArgsThenConstructDescriptor
     : public CallInterfaceDescriptor {
  public:
-  DEFINE_PARAMETERS(kNumberOfArguments, kNewTarget, kConstructor,
-                    kFeedbackElement, kFirstArgument)
+  DEFINE_PARAMETERS(kNumberOfArguments, kFirstArgument, kConstructor,
+                    kNewTarget, kFeedbackElement)
   DEFINE_PARAMETER_TYPES(MachineType::Int32(),      // kNumberOfArguments
-                         MachineType::AnyTagged(),  // kNewTarget
+                         MachineType::Pointer(),    // kFirstArgument
                          MachineType::AnyTagged(),  // kConstructor
-                         MachineType::AnyTagged(),  // kFeedbackElement
-                         MachineType::Pointer())    // kFirstArgument
+                         MachineType::AnyTagged(),  // kNewTarget
+                         MachineType::AnyTagged())  // kFeedbackElement
   DECLARE_DESCRIPTOR(InterpreterPushArgsThenConstructDescriptor,
                      CallInterfaceDescriptor)
+
+#if V8_TARGET_ARCH_IA32
+  static const bool kPassLastArgsOnStack = true;
+#else
+  static const bool kPassLastArgsOnStack = false;
+#endif
+
+  // Pass constructor, new target and feedback element through the stack.
+  static const int kStackArgumentsCount = kPassLastArgsOnStack ? 3 : 0;
 };
 
 class InterpreterCEntry1Descriptor : public CallInterfaceDescriptor {
@@ -1019,6 +1083,17 @@ class WasmGrowMemoryDescriptor final : public CallInterfaceDescriptor {
   DEFINE_RESULT_AND_PARAMETER_TYPES(MachineType::Int32(),  // result 1
                                     MachineType::Int32())  // kNumPages
   DECLARE_DESCRIPTOR(WasmGrowMemoryDescriptor, CallInterfaceDescriptor)
+};
+
+class CloneObjectWithVectorDescriptor final : public CallInterfaceDescriptor {
+ public:
+  DEFINE_PARAMETERS(kSource, kFlags, kSlot, kVector)
+  DEFINE_RESULT_AND_PARAMETER_TYPES(MachineType::TaggedPointer(),  // result 1
+                                    MachineType::AnyTagged(),      // kSource
+                                    MachineType::TaggedSigned(),   // kFlags
+                                    MachineType::TaggedSigned(),   // kSlot
+                                    MachineType::AnyTagged())      // kVector
+  DECLARE_DESCRIPTOR(CloneObjectWithVectorDescriptor, CallInterfaceDescriptor)
 };
 
 #define DEFINE_TFS_BUILTIN_DESCRIPTOR(Name, ...)                          \

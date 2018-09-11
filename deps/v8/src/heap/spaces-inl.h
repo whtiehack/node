@@ -5,6 +5,7 @@
 #ifndef V8_HEAP_SPACES_INL_H_
 #define V8_HEAP_SPACES_INL_H_
 
+#include "src/base/bounded-page-allocator.h"
 #include "src/base/v8-fallthrough.h"
 #include "src/heap/incremental-marking.h"
 #include "src/heap/spaces.h"
@@ -468,13 +469,6 @@ V8_WARN_UNUSED_RESULT inline AllocationResult NewSpace::AllocateRawSynchronized(
   return AllocateRaw(size_in_bytes, alignment);
 }
 
-
-LocalAllocationBuffer LocalAllocationBuffer::InvalidBuffer() {
-  return LocalAllocationBuffer(
-      nullptr, LinearAllocationArea(kNullAddress, kNullAddress));
-}
-
-
 LocalAllocationBuffer LocalAllocationBuffer::FromResult(Heap* heap,
                                                         AllocationResult result,
                                                         intptr_t size) {
@@ -506,6 +500,28 @@ bool LocalAllocationBuffer::TryFreeLast(HeapObject* object, int object_size) {
     }
   }
   return false;
+}
+
+// -----------------------------------------------------------------------------
+// MemoryAllocator
+
+bool MemoryAllocator::code_range_valid() const {
+  return code_page_allocator_instance_.get() != nullptr;
+}
+
+Address MemoryAllocator::code_range_start() const {
+  DCHECK(code_range_valid());
+  return code_page_allocator_instance_->begin();
+}
+
+size_t MemoryAllocator::code_range_size() const {
+  DCHECK(code_range_valid());
+  return code_page_allocator_instance_->size();
+}
+
+bool MemoryAllocator::code_range_contains(Address address) const {
+  DCHECK(code_range_valid());
+  return code_page_allocator_instance_->contains(address);
 }
 
 }  // namespace internal

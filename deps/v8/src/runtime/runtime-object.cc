@@ -2,16 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/runtime/runtime-utils.h"
-
-#include "src/arguments.h"
+#include "src/arguments-inl.h"
 #include "src/bootstrapper.h"
 #include "src/debug/debug.h"
 #include "src/isolate-inl.h"
 #include "src/messages.h"
 #include "src/objects/hash-table-inl.h"
+#include "src/objects/js-array-inl.h"
 #include "src/objects/property-descriptor-object.h"
 #include "src/property-descriptor.h"
+#include "src/runtime/runtime-utils.h"
 #include "src/runtime/runtime.h"
 
 namespace v8 {
@@ -47,95 +47,6 @@ MaybeHandle<Object> Runtime::GetObjectProperty(Isolate* isolate,
         Object);
   }
   return result;
-}
-
-static MaybeHandle<Object> KeyedGetObjectProperty(Isolate* isolate,
-                                                  Handle<Object> receiver_obj,
-                                                  Handle<Object> key_obj) {
-  // Fast cases for getting named properties of the receiver JSObject
-  // itself.
-  //
-  // The global proxy objects has to be excluded since LookupOwn on
-  // the global proxy object can return a valid result even though the
-  // global proxy object never has properties.  This is the case
-  // because the global proxy object forwards everything to its hidden
-  // prototype including own lookups.
-  //
-  // Additionally, we need to make sure that we do not cache results
-  // for objects that require access checks.
-
-  // Convert string-index keys to their number variant to avoid internalization
-  // below; and speed up subsequent conversion to index.
-  uint32_t index;
-  if (key_obj->IsString() && String::cast(*key_obj)->AsArrayIndex(&index)) {
-    key_obj = isolate->factory()->NewNumberFromUint(index);
-  }
-  if (receiver_obj->IsJSObject()) {
-    if (!receiver_obj->IsJSGlobalProxy() &&
-        !receiver_obj->IsAccessCheckNeeded() && key_obj->IsName()) {
-      Handle<JSObject> receiver = Handle<JSObject>::cast(receiver_obj);
-      Handle<Name> key = Handle<Name>::cast(key_obj);
-      key_obj = key = isolate->factory()->InternalizeName(key);
-
-      DisallowHeapAllocation no_allocation;
-      if (receiver->IsJSGlobalObject()) {
-        // Attempt dictionary lookup.
-        GlobalDictionary* dictionary =
-            JSGlobalObject::cast(*receiver)->global_dictionary();
-        int entry = dictionary->FindEntry(isolate, key);
-        if (entry != GlobalDictionary::kNotFound) {
-          PropertyCell* cell = dictionary->CellAt(entry);
-          if (cell->property_details().kind() == kData) {
-            Object* value = cell->value();
-            if (!value->IsTheHole(isolate)) {
-              return Handle<Object>(value, isolate);
-            }
-            // If value is the hole (meaning, absent) do the general lookup.
-          }
-        }
-      } else if (!receiver->HasFastProperties()) {
-        // Attempt dictionary lookup.
-        NameDictionary* dictionary = receiver->property_dictionary();
-        int entry = dictionary->FindEntry(isolate, key);
-        if ((entry != NameDictionary::kNotFound) &&
-            (dictionary->DetailsAt(entry).kind() == kData)) {
-          Object* value = dictionary->ValueAt(entry);
-          return Handle<Object>(value, isolate);
-        }
-      }
-    } else if (key_obj->IsSmi()) {
-      // JSObject without a name key. If the key is a Smi, check for a
-      // definite out-of-bounds access to elements, which is a strong indicator
-      // that subsequent accesses will also call the runtime. Proactively
-      // transition elements to FAST_*_ELEMENTS to avoid excessive boxing of
-      // doubles for those future calls in the case that the elements would
-      // become PACKED_DOUBLE_ELEMENTS.
-      Handle<JSObject> js_object = Handle<JSObject>::cast(receiver_obj);
-      ElementsKind elements_kind = js_object->GetElementsKind();
-      if (IsDoubleElementsKind(elements_kind)) {
-        if (Smi::ToInt(*key_obj) >= js_object->elements()->length()) {
-          elements_kind = IsHoleyElementsKind(elements_kind) ? HOLEY_ELEMENTS
-                                                             : PACKED_ELEMENTS;
-          JSObject::TransitionElementsKind(js_object, elements_kind);
-        }
-      } else {
-        DCHECK(IsSmiOrObjectElementsKind(elements_kind) ||
-               !IsFastElementsKind(elements_kind));
-      }
-    }
-  } else if (receiver_obj->IsString() && key_obj->IsSmi()) {
-    // Fast case for string indexing using [] with a smi index.
-    Handle<String> str = Handle<String>::cast(receiver_obj);
-    int index = Handle<Smi>::cast(key_obj)->value();
-    if (index >= 0 && index < str->length()) {
-      Factory* factory = isolate->factory();
-      return factory->LookupSingleCharacterStringFromCode(
-          String::Flatten(isolate, str)->Get(index));
-    }
-  }
-
-  // Fall back to GetObjectProperty.
-  return Runtime::GetObjectProperty(isolate, receiver_obj, key_obj);
 }
 
 namespace {
@@ -405,34 +316,26 @@ RUNTIME_FUNCTION(Runtime_AddDictionaryProperty) {
 RUNTIME_FUNCTION(Runtime_ObjectCreate) {
   HandleScope scope(isolate);
   Handle<Object> prototype = args.at(0);
+  Handle<Object> properties = args.at(1);
+  Handle<JSObject> obj;
+  // 1. If Type(O) is neither Object nor Null, throw a TypeError exception.
   if (!prototype->IsNull(isolate) && !prototype->IsJSReceiver()) {
     THROW_NEW_ERROR_RETURN_FAILURE(
         isolate, NewTypeError(MessageTemplate::kProtoObjectOrNull, prototype));
   }
+  // 2. Let obj be ObjectCreate(O).
+  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+      isolate, obj, JSObject::ObjectCreate(isolate, prototype));
 
-  // Generate the map with the specified {prototype} based on the Object
-  // function's initial map from the current native context.
-  // TODO(bmeurer): Use a dedicated cache for Object.create; think about
-  // slack tracking for Object.create.
-  Handle<Map> map =
-      Map::GetObjectCreateMap(isolate, Handle<HeapObject>::cast(prototype));
-
-  // Actually allocate the object.
-  Handle<JSObject> object;
-  if (map->is_dictionary_map()) {
-    object = isolate->factory()->NewSlowJSObjectFromMap(map);
-  } else {
-    object = isolate->factory()->NewJSObjectFromMap(map);
-  }
-
-  // Define the properties if properties was specified and is not undefined.
-  Handle<Object> properties = args.at(1);
+  // 3. If Properties is not undefined, then
   if (!properties->IsUndefined(isolate)) {
-    RETURN_FAILURE_ON_EXCEPTION(
-        isolate, JSReceiver::DefineProperties(isolate, object, properties));
+    // a. Return ? ObjectDefineProperties(obj, Properties).
+    // Define the properties if properties was specified and is not undefined.
+    RETURN_RESULT_OR_FAILURE(
+        isolate, JSReceiver::DefineProperties(isolate, obj, properties));
   }
-
-  return *object;
+  // 4. Return obj.
+  return *obj;
 }
 
 MaybeHandle<Object> Runtime::SetObjectProperty(Isolate* isolate,
@@ -464,14 +367,6 @@ MaybeHandle<Object> Runtime::SetObjectProperty(Isolate* isolate,
   MAYBE_RETURN_NULL(Object::SetProperty(&it, value, language_mode,
                                         Object::MAY_BE_STORE_FROM_KEYED));
   return value;
-}
-
-
-RUNTIME_FUNCTION(Runtime_GetPrototype) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(1, args.length());
-  CONVERT_ARG_HANDLE_CHECKED(JSReceiver, obj, 0);
-  RETURN_RESULT_OR_FAILURE(isolate, JSReceiver::GetPrototype(isolate, obj));
 }
 
 
@@ -569,24 +464,91 @@ RUNTIME_FUNCTION(Runtime_ObjectEntriesSkipFastPath) {
 RUNTIME_FUNCTION(Runtime_GetProperty) {
   HandleScope scope(isolate);
   DCHECK_EQ(2, args.length());
-
-  CONVERT_ARG_HANDLE_CHECKED(Object, object, 0);
-  CONVERT_ARG_HANDLE_CHECKED(Object, key, 1);
-
-  RETURN_RESULT_OR_FAILURE(isolate,
-                           Runtime::GetObjectProperty(isolate, object, key));
-}
-
-// KeyedGetProperty is called from KeyedLoadIC::GenerateGeneric.
-RUNTIME_FUNCTION(Runtime_KeyedGetProperty) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(2, args.length());
-
   CONVERT_ARG_HANDLE_CHECKED(Object, receiver_obj, 0);
   CONVERT_ARG_HANDLE_CHECKED(Object, key_obj, 1);
 
+  // Fast cases for getting named properties of the receiver JSObject
+  // itself.
+  //
+  // The global proxy objects has to be excluded since LookupOwn on
+  // the global proxy object can return a valid result even though the
+  // global proxy object never has properties.  This is the case
+  // because the global proxy object forwards everything to its hidden
+  // prototype including own lookups.
+  //
+  // Additionally, we need to make sure that we do not cache results
+  // for objects that require access checks.
+
+  // Convert string-index keys to their number variant to avoid internalization
+  // below; and speed up subsequent conversion to index.
+  uint32_t index;
+  if (key_obj->IsString() && String::cast(*key_obj)->AsArrayIndex(&index)) {
+    key_obj = isolate->factory()->NewNumberFromUint(index);
+  }
+  if (receiver_obj->IsJSObject()) {
+    if (!receiver_obj->IsJSGlobalProxy() &&
+        !receiver_obj->IsAccessCheckNeeded() && key_obj->IsName()) {
+      Handle<JSObject> receiver = Handle<JSObject>::cast(receiver_obj);
+      Handle<Name> key = Handle<Name>::cast(key_obj);
+      key_obj = key = isolate->factory()->InternalizeName(key);
+
+      DisallowHeapAllocation no_allocation;
+      if (receiver->IsJSGlobalObject()) {
+        // Attempt dictionary lookup.
+        GlobalDictionary* dictionary =
+            JSGlobalObject::cast(*receiver)->global_dictionary();
+        int entry = dictionary->FindEntry(isolate, key);
+        if (entry != GlobalDictionary::kNotFound) {
+          PropertyCell* cell = dictionary->CellAt(entry);
+          if (cell->property_details().kind() == kData) {
+            Object* value = cell->value();
+            if (!value->IsTheHole(isolate)) return value;
+            // If value is the hole (meaning, absent) do the general lookup.
+          }
+        }
+      } else if (!receiver->HasFastProperties()) {
+        // Attempt dictionary lookup.
+        NameDictionary* dictionary = receiver->property_dictionary();
+        int entry = dictionary->FindEntry(isolate, key);
+        if ((entry != NameDictionary::kNotFound) &&
+            (dictionary->DetailsAt(entry).kind() == kData)) {
+          return dictionary->ValueAt(entry);
+        }
+      }
+    } else if (key_obj->IsSmi()) {
+      // JSObject without a name key. If the key is a Smi, check for a
+      // definite out-of-bounds access to elements, which is a strong indicator
+      // that subsequent accesses will also call the runtime. Proactively
+      // transition elements to FAST_*_ELEMENTS to avoid excessive boxing of
+      // doubles for those future calls in the case that the elements would
+      // become PACKED_DOUBLE_ELEMENTS.
+      Handle<JSObject> js_object = Handle<JSObject>::cast(receiver_obj);
+      ElementsKind elements_kind = js_object->GetElementsKind();
+      if (IsDoubleElementsKind(elements_kind)) {
+        if (Smi::ToInt(*key_obj) >= js_object->elements()->length()) {
+          elements_kind = IsHoleyElementsKind(elements_kind) ? HOLEY_ELEMENTS
+                                                             : PACKED_ELEMENTS;
+          JSObject::TransitionElementsKind(js_object, elements_kind);
+        }
+      } else {
+        DCHECK(IsSmiOrObjectElementsKind(elements_kind) ||
+               !IsFastElementsKind(elements_kind));
+      }
+    }
+  } else if (receiver_obj->IsString() && key_obj->IsSmi()) {
+    // Fast case for string indexing using [] with a smi index.
+    Handle<String> str = Handle<String>::cast(receiver_obj);
+    int index = Handle<Smi>::cast(key_obj)->value();
+    if (index >= 0 && index < str->length()) {
+      Factory* factory = isolate->factory();
+      return *factory->LookupSingleCharacterStringFromCode(
+          String::Flatten(isolate, str)->Get(index));
+    }
+  }
+
+  // Fall back to GetObjectProperty.
   RETURN_RESULT_OR_FAILURE(
-      isolate, KeyedGetObjectProperty(isolate, receiver_obj, key_obj));
+      isolate, Runtime::GetObjectProperty(isolate, receiver_obj, key_obj));
 }
 
 RUNTIME_FUNCTION(Runtime_AddNamedProperty) {
@@ -1237,27 +1199,6 @@ RUNTIME_FUNCTION(Runtime_CreateDataProperty) {
   MAYBE_RETURN(JSReceiver::CreateDataProperty(&it, value, kThrowOnError),
                ReadOnlyRoots(isolate).exception());
   return *value;
-}
-
-// Checks that 22.2.2.1.1 Runtime Semantics: IterableToList produces exactly the
-// same result as doing nothing.
-RUNTIME_FUNCTION(Runtime_IterableToListCanBeElided) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(1, args.length());
-  CONVERT_ARG_HANDLE_CHECKED(Object, obj, 0);
-
-  // If an iterator symbol is added to the Number prototype, we could see a Smi.
-  if (obj->IsSmi()) return isolate->heap()->ToBoolean(false);
-  if (!HeapObject::cast(*obj)->IsJSObject()) {
-    return isolate->heap()->ToBoolean(false);
-  }
-
-  // While iteration alone may not have observable side-effects, calling
-  // toNumber on an object will. Make sure the arg is not an array of objects.
-  ElementsKind kind = JSObject::cast(*obj)->GetElementsKind();
-  if (!IsFastNumberElementsKind(kind)) return isolate->heap()->ToBoolean(false);
-
-  return isolate->heap()->ToBoolean(!obj->IterationHasObservableEffects());
 }
 
 RUNTIME_FUNCTION(Runtime_GetOwnPropertyDescriptor) {

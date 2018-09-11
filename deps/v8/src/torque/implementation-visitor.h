@@ -19,8 +19,8 @@ namespace internal {
 namespace torque {
 
 struct LocationReference {
-  LocationReference(Value* v, VisitResult b, VisitResult i)
-      : value(v), base(b), index(i) {}
+  LocationReference(Value* value, VisitResult base, VisitResult index)
+      : value(value), base(base), index(index) {}
   Value* value;
   VisitResult base;
   VisitResult index;
@@ -48,22 +48,22 @@ class ImplementationVisitor : public FileVisitor {
     return LocationReference({}, Visit(expr->array), Visit(expr->index));
   }
 
-  std::string RValueFlattenStructs(VisitResult result);
+  std::string RValueFlattenStructs(const VisitResult& result);
 
-  VisitResult GenerateFetchFromLocation(LocationReference reference) {
+  VisitResult GenerateFetchFromLocation(const LocationReference& reference) {
     const Value* value = reference.value;
     return VisitResult(value->type(), value);
   }
   VisitResult GenerateFetchFromLocation(LocationExpression* location,
-                                        LocationReference reference);
+                                        const LocationReference& reference);
   VisitResult GenerateFetchFromLocation(IdentifierExpression* expr,
-                                        LocationReference reference) {
+                                        const LocationReference& reference) {
     return GenerateFetchFromLocation(reference);
   }
   VisitResult GenerateFetchFromLocation(FieldAccessExpression* expr,
-                                        LocationReference reference);
+                                        const LocationReference& reference);
   VisitResult GenerateFetchFromLocation(ElementAccessExpression* expr,
-                                        LocationReference reference) {
+                                        const LocationReference& reference) {
     Arguments arguments;
     arguments.parameters = {reference.base, reference.index};
     return GenerateCall("[]", arguments);
@@ -115,13 +115,11 @@ class ImplementationVisitor : public FileVisitor {
   VisitResult Visit(LogicalOrExpression* expr);
   VisitResult Visit(LogicalAndExpression* expr);
 
-  LocationReference GetLocationReference(
-      TorqueParser::LocationExpressionContext* locationExpression);
-
   VisitResult Visit(IncrementDecrementExpression* expr);
   VisitResult Visit(AssignmentExpression* expr);
   VisitResult Visit(StringLiteralExpression* expr);
   VisitResult Visit(NumberLiteralExpression* expr);
+  VisitResult Visit(AssumeTypeImpossibleExpression* expr);
 
   const Type* Visit(TryLabelStatement* stmt);
   const Type* Visit(ReturnStatement* stmt);
@@ -156,14 +154,14 @@ class ImplementationVisitor : public FileVisitor {
         : new_lines_(new_lines), visitor_(visitor) {
       if (new_lines) visitor->GenerateIndent();
       visitor->source_out() << "{";
-      if (new_lines) visitor->source_out() << std::endl;
+      if (new_lines) visitor->source_out() << "\n";
       visitor->indent_++;
     }
     ~ScopedIndent() {
       visitor_->indent_--;
       visitor_->GenerateIndent();
       visitor_->source_out() << "}";
-      if (new_lines_) visitor_->source_out() << std::endl;
+      if (new_lines_) visitor_->source_out() << "\n";
     }
 
    private:
@@ -171,12 +169,13 @@ class ImplementationVisitor : public FileVisitor {
     ImplementationVisitor* visitor_;
   };
 
-  Callable* LookupCall(const std::string& name, const Arguments& arguments);
+  Callable* LookupCall(const std::string& name, const Arguments& arguments,
+                       const TypeVector& specialization_types);
 
   bool GenerateChangedVarFromControlSplit(const Variable* v, bool first = true);
 
   void GetFlattenedStructsVars(const Variable* base,
-                               std::set<const Variable*>& vars);
+                               std::set<const Variable*>* vars);
 
   void GenerateChangedVarsFromControlSplit(AstNode* node);
 
@@ -184,16 +183,20 @@ class ImplementationVisitor : public FileVisitor {
 
   VisitResult GenerateCopy(const VisitResult& to_copy);
 
-  void GenerateAssignToVariable(Variable* var, VisitResult value);
+  void GenerateAssignToVariable(Variable* var, const VisitResult& value);
 
   void GenerateAssignToLocation(LocationExpression* location,
                                 const LocationReference& reference,
-                                VisitResult assignment_value);
+                                const VisitResult& assignment_value);
 
   void GenerateVariableDeclaration(const Variable* var);
 
+  Variable* GeneratePredeclaredVariableDeclaration(
+      const std::string& name,
+      const base::Optional<VisitResult>& initialization);
+
   Variable* GenerateVariableDeclaration(
-      AstNode* node, const std::string& name,
+      AstNode* node, const std::string& name, bool is_const,
       const base::Optional<const Type*>& type,
       const base::Optional<VisitResult>& initialization = {});
 
@@ -202,7 +205,9 @@ class ImplementationVisitor : public FileVisitor {
   void GenerateParameterList(const NameVector& list, size_t first = 0);
 
   VisitResult GenerateCall(const std::string& callable_name,
-                           Arguments parameters, bool tail_call = false);
+                           Arguments parameters,
+                           const TypeVector& specialization_types = {},
+                           bool tail_call = false);
   VisitResult GeneratePointerCall(Expression* callee,
                                   const Arguments& parameters, bool tail_call);
 

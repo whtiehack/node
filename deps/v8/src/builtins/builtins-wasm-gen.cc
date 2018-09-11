@@ -5,6 +5,7 @@
 #include "src/builtins/builtins-utils-gen.h"
 #include "src/code-stub-assembler.h"
 #include "src/objects-inl.h"
+#include "src/wasm/wasm-objects.h"
 #include "src/wasm/wasm-opcodes.h"
 
 namespace v8 {
@@ -52,18 +53,6 @@ class WasmBuiltinsAssembler : public CodeStubAssembler {
 TF_BUILTIN(WasmAllocateHeapNumber, WasmBuiltinsAssembler) {
   TNode<Code> target = LoadBuiltinFromFrame(Builtins::kAllocateHeapNumber);
   TailCallStub(AllocateHeapNumberDescriptor(), target, NoContextConstant());
-}
-
-TF_BUILTIN(WasmArgumentsAdaptor, WasmBuiltinsAssembler) {
-  TNode<Object> context = UncheckedParameter(Descriptor::kContext);
-  TNode<Object> function = UncheckedParameter(Descriptor::kTarget);
-  TNode<Object> new_target = UncheckedParameter(Descriptor::kNewTarget);
-  TNode<Object> argc1 = UncheckedParameter(Descriptor::kActualArgumentsCount);
-  TNode<Object> argc2 = UncheckedParameter(Descriptor::kExpectedArgumentsCount);
-  TNode<Code> target =
-      LoadBuiltinFromFrame(Builtins::kArgumentsAdaptorTrampoline);
-  TailCallStub(ArgumentAdaptorDescriptor{}, target, context, function,
-               new_target, argc1, argc2);
 }
 
 TF_BUILTIN(WasmCallJavaScript, WasmBuiltinsAssembler) {

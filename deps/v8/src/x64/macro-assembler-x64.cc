@@ -15,6 +15,7 @@
 #include "src/debug/debug.h"
 #include "src/external-reference-table.h"
 #include "src/frames-inl.h"
+#include "src/globals.h"
 #include "src/heap/heap-inl.h"
 #include "src/instruction-stream.h"
 #include "src/objects-inl.h"
@@ -186,27 +187,6 @@ Operand TurboAssembler::ExternalOperand(ExternalReference target,
   return Operand(scratch, 0);
 }
 
-int TurboAssembler::LoadAddressSize(ExternalReference source) {
-  if (root_array_available_ && options().enable_root_array_delta_access) {
-    // This calculation depends on the internals of LoadAddress.
-    // It's correctness is ensured by the asserts in the Call
-    // instruction below.
-    int64_t delta = RootRegisterDelta(source);
-    if (delta != kInvalidRootRegisterDelta && is_int32(delta)) {
-      // Operand is leap(scratch, Operand(kRootRegister, delta));
-      // Opcodes : REX.W 8D ModRM Disp8/Disp32  - 4 or 7.
-      int size = 4;
-      if (!is_int8(static_cast<int32_t>(delta))) {
-        size += 3;  // Need full four-byte displacement in lea.
-      }
-      return size;
-    }
-  }
-  // Size of movp(destination, src);
-  return Assembler::kMoveAddressIntoScratchRegisterInstructionLength;
-}
-
-
 void MacroAssembler::PushAddress(ExternalReference source) {
   LoadAddress(kScratchRegister, source);
   Push(kScratchRegister);
@@ -305,8 +285,6 @@ void TurboAssembler::CallRecordWriteStub(
       RecordWriteDescriptor::kObject));
   Register slot_parameter(
       callable.descriptor().GetRegisterParameter(RecordWriteDescriptor::kSlot));
-  Register isolate_parameter(callable.descriptor().GetRegisterParameter(
-      RecordWriteDescriptor::kIsolate));
   Register remembered_set_parameter(callable.descriptor().GetRegisterParameter(
       RecordWriteDescriptor::kRememberedSet));
   Register fp_mode_parameter(callable.descriptor().GetRegisterParameter(
@@ -330,8 +308,6 @@ void TurboAssembler::CallRecordWriteStub(
     // object_parameter /\ object
     xchgq(slot_parameter, object_parameter);
   }
-
-  LoadAddress(isolate_parameter, ExternalReference::isolate_address(isolate()));
 
   Smi* smi_rsa = Smi::FromEnum(remembered_set_action);
   Smi* smi_fm = Smi::FromEnum(fp_mode);
@@ -445,6 +421,16 @@ void TurboAssembler::Abort(AbortReason reason) {
   // Avoid emitting call to builtin if requested.
   if (trap_on_abort()) {
     int3();
+    return;
+  }
+
+  if (should_abort_hard()) {
+    // We don't care if we constructed a frame. Just pretend we did.
+    FrameScope assume_frame(this, StackFrame::NONE);
+    movl(arg_reg_1, Immediate(static_cast<int>(reason)));
+    PrepareCallCFunction(1);
+    LoadAddress(rax, ExternalReference::abort_with_reason());
+    call(rax);
     return;
   }
 
@@ -1504,6 +1490,7 @@ if (FLAG_embedded_builtins) {
     if (isolate()->builtins()->IsBuiltinHandle(code_object, &builtin_index) &&
         Builtins::IsIsolateIndependent(builtin_index)) {
       // Inline the trampoline.
+      RecordCommentForOffHeapTrampoline(builtin_index);
       CHECK_NE(builtin_index, Builtins::kNoBuiltinId);
       EmbeddedData d = EmbeddedData::FromBlob();
       Address entry = d.InstructionStartOfBuiltin(builtin_index);
@@ -1521,19 +1508,9 @@ void MacroAssembler::JumpToInstructionStream(Address entry) {
   jmp(kOffHeapTrampolineRegister);
 }
 
-int TurboAssembler::CallSize(ExternalReference ext) {
-  // Opcode for call kScratchRegister is: Rex.B FF D4 (three bytes).
-  return LoadAddressSize(ext) +
-         Assembler::kCallScratchRegisterInstructionLength;
-}
-
 void TurboAssembler::Call(ExternalReference ext) {
-#ifdef DEBUG
-  int end_position = pc_offset() + CallSize(ext);
-#endif
   LoadAddress(kScratchRegister, ext);
   call(kScratchRegister);
-  DCHECK_EQ(end_position, pc_offset());
 }
 
 void TurboAssembler::Call(Operand op) {
@@ -1546,12 +1523,8 @@ void TurboAssembler::Call(Operand op) {
 }
 
 void TurboAssembler::Call(Address destination, RelocInfo::Mode rmode) {
-#ifdef DEBUG
-  int end_position = pc_offset() + CallSize(destination);
-#endif
   Move(kScratchRegister, destination, rmode);
   call(kScratchRegister);
-  DCHECK_EQ(pc_offset(), end_position);
 }
 
 void TurboAssembler::Call(Handle<Code> code_object, RelocInfo::Mode rmode) {
@@ -1572,6 +1545,7 @@ void TurboAssembler::Call(Handle<Code> code_object, RelocInfo::Mode rmode) {
       if (isolate()->builtins()->IsBuiltinHandle(code_object, &builtin_index) &&
           Builtins::IsIsolateIndependent(builtin_index)) {
         // Inline the trampoline.
+        RecordCommentForOffHeapTrampoline(builtin_index);
         CHECK_NE(builtin_index, Builtins::kNoBuiltinId);
         EmbeddedData d = EmbeddedData::FromBlob();
         Address entry = d.InstructionStartOfBuiltin(builtin_index);
@@ -1581,12 +1555,8 @@ void TurboAssembler::Call(Handle<Code> code_object, RelocInfo::Mode rmode) {
       }
     }
   }
-#ifdef DEBUG
-  int end_position = pc_offset() + CallSize(code_object);
-#endif
   DCHECK(RelocInfo::IsCodeTarget(rmode));
   call(code_object, rmode);
-  DCHECK_EQ(end_position, pc_offset());
 }
 
 void TurboAssembler::RetpolineCall(Register reg) {
@@ -1610,14 +1580,8 @@ void TurboAssembler::RetpolineCall(Register reg) {
 }
 
 void TurboAssembler::RetpolineCall(Address destination, RelocInfo::Mode rmode) {
-#ifdef DEBUG
-// TODO(titzer): CallSize() is wrong for RetpolineCalls
-//  int end_position = pc_offset() + CallSize(destination);
-#endif
   Move(kScratchRegister, destination, rmode);
   RetpolineCall(kScratchRegister);
-  // TODO(titzer): CallSize() is wrong for RetpolineCalls
-  //  DCHECK_EQ(pc_offset(), end_position);
 }
 
 void TurboAssembler::RetpolineJump(Register reg) {
@@ -2596,43 +2560,14 @@ void TurboAssembler::CallCFunction(Register function, int num_arguments) {
   movp(rsp, Operand(rsp, argument_slots_on_stack * kRegisterSize));
 }
 
-
-#ifdef DEBUG
-bool AreAliased(Register reg1,
-                Register reg2,
-                Register reg3,
-                Register reg4,
-                Register reg5,
-                Register reg6,
-                Register reg7,
-                Register reg8) {
-  int n_of_valid_regs = reg1.is_valid() + reg2.is_valid() +
-      reg3.is_valid() + reg4.is_valid() + reg5.is_valid() + reg6.is_valid() +
-      reg7.is_valid() + reg8.is_valid();
-
-  RegList regs = 0;
-  if (reg1.is_valid()) regs |= reg1.bit();
-  if (reg2.is_valid()) regs |= reg2.bit();
-  if (reg3.is_valid()) regs |= reg3.bit();
-  if (reg4.is_valid()) regs |= reg4.bit();
-  if (reg5.is_valid()) regs |= reg5.bit();
-  if (reg6.is_valid()) regs |= reg6.bit();
-  if (reg7.is_valid()) regs |= reg7.bit();
-  if (reg8.is_valid()) regs |= reg8.bit();
-  int n_of_non_aliasing_regs = NumRegs(regs);
-
-  return n_of_valid_regs != n_of_non_aliasing_regs;
-}
-#endif
-
 void TurboAssembler::CheckPageFlag(Register object, Register scratch, int mask,
                                    Condition cc, Label* condition_met,
                                    Label::Distance condition_met_distance) {
   DCHECK(cc == zero || cc == not_zero);
   if (scratch == object) {
-    andp(scratch, Immediate(~Page::kPageAlignmentMask));
+    andp(scratch, Immediate(~kPageAlignmentMask));
   } else {
-    movp(scratch, Immediate(~Page::kPageAlignmentMask));
+    movp(scratch, Immediate(~kPageAlignmentMask));
     andp(scratch, object);
   }
   if (mask < (1 << kBitsPerByte)) {

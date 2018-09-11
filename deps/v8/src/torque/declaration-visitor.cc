@@ -299,15 +299,22 @@ Parameter* DeclarationVisitor::DeclareParameter(const std::string& name,
 
 void DeclarationVisitor::Visit(VarDeclarationStatement* stmt) {
   std::string variable_name = stmt->name;
-  const Type* type = declarations()->GetType(stmt->type);
-  if (type->IsConstexpr() && !stmt->const_qualified) {
-    ReportError(
-        "cannot declare variable with constexpr type. Use 'const' instead.");
-  }
-  DeclareVariable(variable_name, type, stmt->const_qualified);
-  if (global_context_.verbose()) {
-    std::cout << "declared variable " << variable_name << " with type " << *type
-              << "\n";
+  if (!stmt->const_qualified) {
+    if (!stmt->type) {
+      ReportError(
+          "variable declaration is missing type. Only 'const' bindings can "
+          "infer the type.");
+    }
+    const Type* type = declarations()->GetType(*stmt->type);
+    if (type->IsConstexpr()) {
+      ReportError(
+          "cannot declare variable with constexpr type. Use 'const' instead.");
+    }
+    DeclareVariable(variable_name, type, stmt->const_qualified);
+    if (global_context_.verbose()) {
+      std::cout << "declared variable " << variable_name << " with type "
+                << *type << "\n";
+    }
   }
 
   // const qualified variables are required to be initialized properly.
@@ -434,9 +441,15 @@ void DeclarationVisitor::Visit(ForLoopStatement* stmt) {
   Declarations::NodeScopeActivator scope(declarations(), stmt);
   if (stmt->var_declaration) Visit(*stmt->var_declaration);
   PushControlSplit();
-  DeclareExpressionForBranch(stmt->test);
+
+  // Same as DeclareExpressionForBranch, but without the extra scope.
+  // If no test expression is present we can not use it for the scope.
+  declarations()->DeclareLabel(kTrueLabelName);
+  declarations()->DeclareLabel(kFalseLabelName);
+  if (stmt->test) Visit(*stmt->test);
+
   Visit(stmt->body);
-  Visit(stmt->action);
+  if (stmt->action) Visit(*stmt->action);
   auto changed_vars = PopControlSplit();
   global_context_.AddControlSplitChangedVariables(
       stmt, declarations()->GetCurrentSpecializationTypeNamesVector(),
@@ -462,7 +475,7 @@ void DeclarationVisitor::Visit(TryLabelStatement* stmt) {
         }
 
         size_t i = 0;
-        for (auto p : block->parameters.names) {
+        for (const auto& p : block->parameters.names) {
           const Type* type =
               declarations()->GetType(block->parameters.types[i]);
           if (type->IsConstexpr()) {
@@ -518,7 +531,7 @@ void DeclarationVisitor::GenerateHeader(std::string& file_name) {
     }
     if (declareParameters) {
       int index = 0;
-      for (auto parameter : builtin->parameter_names()) {
+      for (const auto& parameter : builtin->parameter_names()) {
         if (index >= firstParameterIndex) {
           new_contents_stream << ", k" << CamelifyString(parameter);
         }
@@ -606,7 +619,7 @@ bool DeclarationVisitor::MarkVariableModified(const Variable* variable) {
 
 void DeclarationVisitor::DeclareSignature(const Signature& signature) {
   auto type_iterator = signature.parameter_types.types.begin();
-  for (auto name : signature.parameter_names) {
+  for (const auto& name : signature.parameter_names) {
     const Type* t(*type_iterator++);
     if (name.size() != 0) {
       DeclareParameter(name, t);

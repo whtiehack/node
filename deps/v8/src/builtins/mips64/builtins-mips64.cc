@@ -13,7 +13,9 @@
 #include "src/frames.h"
 #include "src/mips64/constants-mips64.h"
 #include "src/objects-inl.h"
+#include "src/objects/js-generator.h"
 #include "src/runtime/runtime.h"
+#include "src/wasm/wasm-objects.h"
 
 namespace v8 {
 namespace internal {
@@ -1882,7 +1884,7 @@ void Builtins::Generate_CallBoundFunctionImpl(MacroAssembler* masm) {
     // Check the stack for overflow. We are not trying to catch interruptions
     // (i.e. debug break and preemption) here, so check the "real stack limit".
     __ LoadRoot(kScratchReg, Heap::kRealStackLimitRootIndex);
-    __ Branch(&done, gt, sp, Operand(kScratchReg));  // Signed comparison.
+    __ Branch(&done, hs, sp, Operand(kScratchReg));
     // Restore the stack pointer.
     __ Daddu(sp, sp, Operand(a5));
     {
@@ -2036,7 +2038,7 @@ void Builtins::Generate_ConstructBoundFunction(MacroAssembler* masm) {
     // Check the stack for overflow. We are not trying to catch interruptions
     // (i.e. debug break and preemption) here, so check the "real stack limit".
     __ LoadRoot(kScratchReg, Heap::kRealStackLimitRootIndex);
-    __ Branch(&done, gt, sp, Operand(kScratchReg));  // Signed comparison.
+    __ Branch(&done, hs, sp, Operand(kScratchReg));
     // Restore the stack pointer.
     __ Daddu(sp, sp, Operand(a5));
     {
@@ -2288,7 +2290,7 @@ void Builtins::Generate_WasmCompileLazy(MacroAssembler* masm) {
   // Convert to Smi for the runtime call
   __ SmiTag(t0);
   {
-    TrapOnAbortScope trap_on_abort_scope(masm);  // Avoid calls to Abort.
+    HardAbortScope hard_abort(masm);  // Avoid calls to Abort.
     FrameScope scope(masm, StackFrame::WASM_COMPILE_LAZY);
 
     // Save all parameter registers (see wasm-linkage.cc). They might be
@@ -2382,10 +2384,9 @@ void Builtins::Generate_CEntry(MacroAssembler* masm, int result_size,
     if (kArchVariant >= kMips64r6) {
       __ addiupc(ra, kNumInstructionsToJump + 1);
     } else {
-      // This branch-and-link sequence is needed to find the current PC on mips
-      // before r6, saved to the ra register.
-      __ bal(&find_ra);  // bal exposes branch delay slot.
-      __ Daddu(ra, ra, kNumInstructionsToJump * Instruction::kInstrSize);
+      // This no-op-and-link sequence saves PC + 8 in ra register on pre-r6 MIPS
+      __ nal();  // nal has branch delay slot.
+      __ Daddu(ra, ra, kNumInstructionsToJump * kInstrSize);
     }
     __ bind(&find_ra);
 

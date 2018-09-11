@@ -123,6 +123,7 @@ class V8_EXPORT_PRIVATE EffectControlLinearizer {
   Node* LowerArrayBufferWasNeutered(Node* node);
   Node* LowerSameValue(Node* node);
   Node* LowerDeadValue(Node* node);
+  Node* LowerStringConcat(Node* node);
   Node* LowerStringToNumber(Node* node);
   Node* LowerStringCharCodeAt(Node* node);
   Node* LowerStringCodePointAt(Node* node, UnicodeEncoding encoding);
@@ -178,8 +179,10 @@ class V8_EXPORT_PRIVATE EffectControlLinearizer {
                                                  const VectorSlotPair& feedback,
                                                  Node* value,
                                                  Node* frame_state);
+  Node* BuildReverseBytes(ExternalArrayType type, Node* value);
   Node* BuildFloat64RoundDown(Node* value);
   Node* BuildFloat64RoundTruncate(Node* input);
+  Node* BuildUint32Mod(Node* lhs, Node* rhs);
   Node* ComputeIntegerHash(Node* value);
   Node* LowerStringComparison(Callable const& callable, Node* node);
   Node* IsElementsKindGreaterThan(Node* kind, ElementsKind reference_kind);

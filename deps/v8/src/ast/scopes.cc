@@ -319,7 +319,7 @@ void DeclarationScope::SetDefaults() {
   should_eager_compile_ = false;
   was_lazily_parsed_ = false;
   is_skipped_function_ = false;
-  produced_preparsed_scope_data_ = nullptr;
+  preparsed_scope_data_builder_ = nullptr;
 #ifdef DEBUG
   DeclarationScope* outer_declaration_scope =
       outer_scope_ ? outer_scope_->GetDeclarationScope() : nullptr;
@@ -1532,7 +1532,7 @@ void DeclarationScope::ResetAfterPreparsing(AstValueFactory* ast_value_factory,
 
 void Scope::SavePreParsedScopeData() {
   DCHECK(FLAG_preparser_scope_analysis);
-  if (ProducedPreParsedScopeData::ScopeIsSkippableFunctionScope(this)) {
+  if (PreParsedScopeDataBuilder::ScopeIsSkippableFunctionScope(this)) {
     AsDeclarationScope()->SavePreParsedScopeDataForDeclarationScope();
   }
 
@@ -1542,9 +1542,9 @@ void Scope::SavePreParsedScopeData() {
 }
 
 void DeclarationScope::SavePreParsedScopeDataForDeclarationScope() {
-  if (produced_preparsed_scope_data_ != nullptr) {
+  if (preparsed_scope_data_builder_ != nullptr) {
     DCHECK(FLAG_preparser_scope_analysis);
-    produced_preparsed_scope_data_->SaveScopeAllocationData(this);
+    preparsed_scope_data_builder_->SaveScopeAllocationData(this);
   }
 }
 
@@ -1554,8 +1554,8 @@ void DeclarationScope::AnalyzePartially(AstNodeFactory* ast_node_factory) {
 
   if (!outer_scope_->is_script_scope() ||
       (FLAG_preparser_scope_analysis &&
-       produced_preparsed_scope_data_ != nullptr &&
-       produced_preparsed_scope_data_->ContainsInnerFunctions())) {
+       preparsed_scope_data_builder_ != nullptr &&
+       preparsed_scope_data_builder_->ContainsInnerFunctions())) {
     // Try to resolve unresolved variables for this Scope and migrate those
     // which cannot be resolved inside. It doesn't make sense to try to resolve
     // them in the outer Scopes here, because they are incomplete.
@@ -2178,25 +2178,16 @@ void Scope::AllocateHeapSlot(Variable* var) {
 void DeclarationScope::AllocateParameterLocals() {
   DCHECK(is_function_scope());
 
-  bool uses_sloppy_arguments = false;
-
+  bool has_mapped_arguments = false;
   if (arguments_ != nullptr) {
     DCHECK(!is_arrow_scope());
-    // 'arguments' is used. Unless there is also a parameter called
-    // 'arguments', we must be conservative and allocate all parameters to
-    // the context assuming they will be captured by the arguments object.
-    // If we have a parameter named 'arguments', a (new) value is always
-    // assigned to it via the function invocation. Then 'arguments' denotes
-    // that specific parameter value and cannot be used to access the
-    // parameters, which is why we don't need to allocate an arguments
-    // object in that case.
     if (MustAllocate(arguments_) && !has_arguments_parameter_) {
-      // In strict mode 'arguments' does not alias formal parameters.
-      // Therefore in strict mode we allocate parameters as if 'arguments'
-      // were not used.
-      // If the parameter list is not simple, arguments isn't sloppy either.
-      uses_sloppy_arguments =
-          is_sloppy(language_mode()) && has_simple_parameters();
+      // 'arguments' is used and does not refer to a function
+      // parameter of the same name. If the arguments object
+      // aliases formal parameters, we conservatively allocate
+      // them specially in the loop below.
+      has_mapped_arguments =
+          GetArgumentsType() == CreateArgumentsType::kMappedArguments;
     } else {
       // 'arguments' is unused. Tell the code generator that it does not need to
       // allocate the arguments object by nulling out arguments_.
@@ -2212,7 +2203,7 @@ void DeclarationScope::AllocateParameterLocals() {
     Variable* var = params_[i];
     DCHECK(!has_rest_ || var != rest_parameter());
     DCHECK_EQ(this, var->scope());
-    if (uses_sloppy_arguments) {
+    if (has_mapped_arguments) {
       var->set_is_used();
       var->set_maybe_assigned();
       var->ForceContextAllocation();

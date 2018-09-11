@@ -5,12 +5,13 @@
 #include <functional>
 #include <memory>
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/assembler-inl.h"
 #include "src/compiler/wasm-compiler.h"
 #include "src/debug/interface-types.h"
 #include "src/frames-inl.h"
 #include "src/objects.h"
+#include "src/objects/js-array-inl.h"
 #include "src/property-descriptor.h"
 #include "src/simulator.h"
 #include "src/snapshot/snapshot.h"
@@ -26,21 +27,12 @@ namespace v8 {
 namespace internal {
 namespace wasm {
 
-// static
-const WasmExceptionSig WasmException::empty_sig_(0, 0, nullptr);
-
-// static
-constexpr const char* WasmException::kRuntimeIdStr;
-
-// static
-constexpr const char* WasmException::kRuntimeValuesStr;
-
 WireBytesRef WasmModule::LookupFunctionName(const ModuleWireBytes& wire_bytes,
                                             uint32_t function_index) const {
   if (!function_names) {
     function_names.reset(new std::unordered_map<uint32_t, WireBytesRef>());
-    wasm::DecodeFunctionNames(wire_bytes.start(), wire_bytes.end(),
-                              function_names.get());
+    DecodeFunctionNames(wire_bytes.start(), wire_bytes.end(),
+                        function_names.get());
   }
   auto it = function_names->find(function_index);
   if (it == function_names->end()) return WireBytesRef();
@@ -53,20 +45,6 @@ void WasmModule::AddFunctionNameForTesting(int function_index,
     function_names.reset(new std::unordered_map<uint32_t, WireBytesRef>());
   }
   function_names->insert(std::make_pair(function_index, name));
-}
-
-// Get a string stored in the module bytes representing a name.
-WasmName ModuleWireBytes::GetName(WireBytesRef ref) const {
-  if (ref.is_empty()) return {"<?>", 3};  // no name.
-  CHECK(BoundsCheck(ref.offset(), ref.length()));
-  return WasmName::cast(
-      module_bytes_.SubVector(ref.offset(), ref.end_offset()));
-}
-
-// Get a string stored in the module bytes representing a function name.
-WasmName ModuleWireBytes::GetName(const WasmFunction* function,
-                                  const WasmModule* module) const {
-  return GetName(module->LookupFunctionName(*this, function->func_index));
 }
 
 // Get a string stored in the module bytes representing a name.
@@ -195,6 +173,7 @@ Handle<JSArray> GetExports(Isolate* isolate,
   Handle<String> table_string = factory->InternalizeUtf8String("table");
   Handle<String> memory_string = factory->InternalizeUtf8String("memory");
   Handle<String> global_string = factory->InternalizeUtf8String("global");
+  Handle<String> exception_string = factory->InternalizeUtf8String("exception");
 
   // Create the result array.
   const WasmModule* module = module_object->module();
@@ -224,6 +203,9 @@ Handle<JSArray> GetExports(Isolate* isolate,
         break;
       case kExternalGlobal:
         export_kind = global_string;
+        break;
+      case kExternalException:
+        export_kind = exception_string;
         break;
       default:
         UNREACHABLE();

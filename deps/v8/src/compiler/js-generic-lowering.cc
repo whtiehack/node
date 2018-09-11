@@ -82,6 +82,7 @@ REPLACE_STUB_CALL(Equal)
 REPLACE_STUB_CALL(ToInteger)
 REPLACE_STUB_CALL(ToLength)
 REPLACE_STUB_CALL(ToNumber)
+REPLACE_STUB_CALL(ToNumberConvertBigInt)
 REPLACE_STUB_CALL(ToNumeric)
 REPLACE_STUB_CALL(ToName)
 REPLACE_STUB_CALL(ToObject)
@@ -358,14 +359,15 @@ void JSGenericLowering::LowerJSCreateArguments(Node* node) {
 void JSGenericLowering::LowerJSCreateArray(Node* node) {
   CreateArrayParameters const& p = CreateArrayParametersOf(node->op());
   int const arity = static_cast<int>(p.arity());
-  Handle<AllocationSite> const site = p.site();
   auto call_descriptor = Linkage::GetStubCallDescriptor(
       zone(), ArrayConstructorDescriptor{}, arity + 1,
       CallDescriptor::kNeedsFrameState, node->op()->properties());
   Node* stub_code = jsgraph()->ArrayConstructorStubConstant();
   Node* stub_arity = jsgraph()->Int32Constant(arity);
-  Node* type_info = site.is_null() ? jsgraph()->UndefinedConstant()
-                                   : jsgraph()->HeapConstant(site);
+  MaybeHandle<AllocationSite> const maybe_site = p.site();
+  Handle<AllocationSite> site;
+  Node* type_info = maybe_site.ToHandle(&site) ? jsgraph()->HeapConstant(site)
+                                               : jsgraph()->UndefinedConstant();
   Node* receiver = jsgraph()->UndefinedConstant();
   node->InsertInput(zone(), 0, stub_code);
   node->InsertInput(zone(), 3, stub_arity);
@@ -511,6 +513,13 @@ void JSGenericLowering::LowerJSCreateEmptyLiteralArray(Node* node) {
   ReplaceWithStubCall(node, callable, flags);
 }
 
+void JSGenericLowering::LowerJSCreateArrayFromIterable(Node* node) {
+  CallDescriptor::Flags flags = FrameStateFlagForCall(node);
+  Callable callable = Builtins::CallableFor(
+      isolate(), Builtins::kIterableToListWithSymbolLookup);
+  ReplaceWithStubCall(node, callable, flags);
+}
+
 void JSGenericLowering::LowerJSCreateLiteralObject(Node* node) {
   CreateLiteralParameters const& p = CreateLiteralParametersOf(node->op());
   CallDescriptor::Flags flags = FrameStateFlagForCall(node);
@@ -530,6 +539,17 @@ void JSGenericLowering::LowerJSCreateLiteralObject(Node* node) {
   } else {
     ReplaceWithRuntimeCall(node, Runtime::kCreateObjectLiteral);
   }
+}
+
+void JSGenericLowering::LowerJSCloneObject(Node* node) {
+  CloneObjectParameters const& p = CloneObjectParametersOf(node->op());
+  CallDescriptor::Flags flags = FrameStateFlagForCall(node);
+  Callable callable =
+      Builtins::CallableFor(isolate(), Builtins::kCloneObjectIC);
+  node->InsertInput(zone(), 1, jsgraph()->SmiConstant(p.flags()));
+  node->InsertInput(zone(), 2, jsgraph()->SmiConstant(p.feedback().index()));
+  node->InsertInput(zone(), 3, jsgraph()->HeapConstant(p.feedback().vector()));
+  ReplaceWithStubCall(node, callable, flags);
 }
 
 void JSGenericLowering::LowerJSCreateEmptyLiteralObject(Node* node) {
